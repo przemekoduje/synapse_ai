@@ -1,0 +1,1492 @@
+--- SYSTEM VISION & MANIFEST ---
+# Manifest i Architektura Synapse AI
+
+## 1. Wizja Projektu
+**Synapse AI** to inteligentny system asystujący podczas spotkań biznesowych oraz inspekcji terenowych (np. na budowie). System integruje rejestrację multimediów, zaawansowaną analizę LLM oraz automatyzację procesów biznesowych.
+
+## 2. Architektura Systemu
+
+### 2.1. Frontend (Aplikacja Mobilna)
+- **Technologia:** React Native (Expo).
+- **Rola:** 
+  - Interfejs użytkownika do nagrywania audio (spotkania) i wideo (inspekcje).
+  - Wstępna optymalizacja mediów: ekstrakcja klatek z wideo, kompresja danych.
+  - Wyświetlanie wyników analizy i przycisków akcji ("Zatwierdź i wykonaj").
+
+### 2.2. Backend (Logika i LLM)
+- **Technologia:** Python (FastAPI).
+- **Rola:**
+  - Odbieranie paczek danych z aplikacji mobilnej.
+  - Komunikacja z API Gemini 1.5 Pro (analiza multimodalna).
+  - Generowanie ustrukturyzowanego formatu JSON (podsumowania, zadania, opisy).
+  - Bezstanowość: backend nie przechowuje trwale ciężkich mediów.
+
+### 2.3. Orkiestracja i Wykonanie (n8n)
+- **Technologia:** n8n (Webhooks).
+- **Rola:**
+  - Odbieranie zatwierdzonych danych JSON.
+  - Realizacja akcji: wysyłka e-maili, wpisy do Kalendarza Google, zapisywanie notatek w systemach zewnętrznych.
+
+---
+
+## 3. Uniwersalny Manifest Architektury i Podziału Ról
+
+### 3.1. Trójpodział Ról
+1.  **Baza Wiedzy (Dokumentacja):** Single Source of Truth zawarty w folderze `/docs`. Każda zmiana architektury musi zostać tu odnotowana.
+2.  **Architekt (Gemini):** Nadzorca procesu, weryfikuje plany kroków, dba o spójność systemu i standardy bezpieczeństwa.
+3.  **Programista (Antigravity):** Wykonawca zadań, odpowiedzialny za pisanie kodu, testowanie i raportowanie postępów zgodnie z planem.
+
+### 3.2. Sześcioetapowy Obieg Pracy (Workflow)
+Praca nad każdym zadaniem musi przebiegać według schematu:
+1.  **Zadanie:** Przyjęcie instrukcji od Architekta/Użytkownika.
+2.  **Plan:** Wygenerowanie pliku `plan_kroku.md` (Cel, Pliki, Logika, Koszty).
+3.  **TWARDY STOP:** Zatrzymanie pracy i oczekiwanie na weryfikację.
+4.  **Walidacja Architekta:** Sprawdzenie planu pod kątem zgodności z Manifestem.
+5.  **Komenda "Dalej":** Sygnał do rozpoczęcia implementacji.
+6.  **Wdrożenie i Raport:** Realizacja kodu oraz stworzenie `diff_ostatni_krok.md` (lub aktualizacja walkthrough) podsumowującego zmiany.
+
+---
+
+## 4. Zasady Bezpieczeństwa i Higieny Pracy
+
+- **Trace ID:** Każda operacja backendowa i request muszą posiadać identyfikator śledzenia w logach.
+- **Kopie Bezpieczeństwa:** Przed każdą istotną modyfikacją istniejącego pliku, należy stworzyć jego kopię `.bak`.
+- **Izolacja Sekretów:** Zakaz wpisywania kluczy API bezpośrednio w kodzie. Wszystkie sekrety muszą znajdować się w `.env`.
+- **Weryfikacja .env:** Przygotowanie pliku `.env.example` dla każdego modułu.
+- **Zakaz Halucynacji:** Jeśli Programista nie jest pewien działania biblioteki lub fragmentu kodu, ma obowiązek przerwać pracę i zadać pytanie Architektowi.
+- **Minimalizm:** Nie dodajemy niepotrzebnych zależności. Każda biblioteka musi być uzasadniona w planie kroku.
+
+---
+*Dokument ten jest "Biblią" projektu i musi być konsultowany przed każdym etapem prac.*
+
+--- BACKEND: main.py ---
+from fastapi import FastAPI, Request, BackgroundTasks, File, UploadFile
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+import uuid
+import time
+import logging
+import os
+import shutil
+
+# Załadowanie zmiennych środowiskowych przed importami modułów zależnych od .env
+load_dotenv()
+
+from models import MeetingPayload, ExecutionPayload
+import llm_service
+import n8n_client
+import media_processor
+
+
+# Konfiguracja logowania
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("synapse_ai")
+
+app = FastAPI(title="Synapse AI Backend")
+
+# Middleware dla Trace ID
+@app.middleware("http")
+async def add_trace_id_middleware(request: Request, call_next):
+    trace_id = str(uuid.uuid4())
+    request.state.trace_id = trace_id
+    
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    
+    response.headers["X-Trace-ID"] = trace_id
+    response.headers["X-Process-Time"] = str(process_time)
+    
+    return response
+
+@app.get("/health")
+async def health_check(request: Request):
+    return {
+        "status": "ok",
+        "timestamp": time.time(),
+        "trace_id": request.state.trace_id,
+        "version": "0.1.0"
+    }
+
+@app.post("/transcribe")
+async def transcribe_audio_endpoint(request: Request, file: UploadFile = File(...)):
+    """
+    Przyjmuje plik audio, dokonuje transkrypcji i zwraca tekst.
+    """
+    trace_id = request.state.trace_id
+    logger.info(f"[Trace ID: {trace_id}] Otrzymano plik do transkrypcji: {file.filename}")
+    
+    temp_file_path = f"temp_{trace_id}_{file.filename}"
+    
+    try:
+        # Zapis tymczasowy pliku na dysku
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # Wywołanie serwisu transkrypcji (z obsługą chunkingu)
+        transcription_text = await llm_service.transcribe_audio(temp_file_path, trace_id)
+        
+        return {
+            "status": "ok",
+            "transcription": transcription_text,
+            "trace_id": trace_id
+        }
+
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd podczas endpointu /transcribe: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Błąd transkrypcji", "trace_id": trace_id}
+        )
+    finally:
+        # Sprzątanie pliku tymczasowego
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+@app.post("/inspect")
+async def inspect_video_endpoint(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """
+    Przyjmuje plik wideo, ekstrahuje klatki i audio, a następnie analizuje multimodalnie.
+    """
+    trace_id = request.state.trace_id
+    logger.info(f"[Trace ID: {trace_id}] Otrzymano wideo do inspekcji: {file.filename}")
+    
+    video_path = f"video_{trace_id}_{file.filename}"
+    audio_path = None
+    
+    try:
+        # 1. Zapis wideo
+        with open(video_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # 2. Przetwarzanie mediów (Klatki + Audio)
+        frames_base64, audio_path = media_processor.extract_multimodal_data(video_path, trace_id)
+        
+        # 3. Transkrypcja dźwięku z wideo
+        transcription = await llm_service.transcribe_audio(audio_path, trace_id)
+        
+        # 4. Analiza Multimodalna (LLM Vision + Text)
+        analysis_result = await llm_service.analyze_inspection_video(frames_base64, transcription, trace_id)
+        
+        # 5. Wysyłka do n8n została USUNIĘTA z tego miejsca (wymóg pętli decyzyjnej)
+        # Dane są teraz zwracane do aplikacji, która po zatwierdzeniu wyśle je do /execute
+        
+        return {
+            "status": "ok",
+            "analysis": analysis_result,
+            "trace_id": trace_id
+        }
+
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd podczas endpointu /inspect: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e), "trace_id": trace_id}
+        )
+    finally:
+        # Sprzątanie wszystkich plików tymczasowych
+        for path in [video_path, audio_path]:
+            if path and os.path.exists(path):
+                os.remove(path)
+                logger.info(f"[Trace ID: {trace_id}] Usunięto plik tymczasowy: {path}")
+
+@app.post("/analyze")
+async def analyze_meeting(payload: MeetingPayload, request: Request, background_tasks: BackgroundTasks):
+    """
+    Analizuje transkrypcję spotkania i przesyła wynik do n8n.
+    """
+    trace_id = request.state.trace_id
+    logger.info(f"[Trace ID: {trace_id}] Otrzymano żądanie analizy spotkania.")
+    
+    try:
+        # 1. Analiza LLM (OpenAI)
+        analysis_result = await llm_service.analyze_meeting_transcription(payload.transcription, trace_id)
+        
+        # 2. Asynchroniczna wysyłka do n8n została USUNIĘTA (wymóg pętli decyzyjnej)
+        # Zwracamy wynik analizy do UI, aby użytkownik mógł go zatwierdzić.
+        
+        return {
+            "status": "ok",
+            "message": "Analiza rozpoczęta. Wynik zostanie przesłany do orkiestratora.",
+            "trace_id": trace_id,
+            "analysis": analysis_result
+        }
+        
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd endpointu /analyze: {str(e)}")
+        return JSONResponse(
+            status_code=500, 
+            content={"status": "error", "message": str(e), "trace_id": trace_id}
+        )
+
+@app.post("/execute")
+async def execute_confirmed_actions(payload: ExecutionPayload, request: Request, background_tasks: BackgroundTasks):
+    """
+    Odbiera zatwierdzony przez użytkownika zestaw danych i przesyła go do n8n.
+    Używamy Trace ID przekazanego w payloadzie, aby zachować ciągłość logów.
+    """
+    trace_id = payload.trace_id
+    logger.info(f"[Trace ID: {trace_id}] Otrzymano zatwierdzone dane do wykonania (Typ: {payload.type}).")
+    
+    try:
+        # Wysyłka do n8n w tle
+        background_tasks.add_task(
+            n8n_client.send_to_n8n,
+            {
+                "type": payload.type,
+                "analysis": payload.analysis,
+                "session_id": payload.session_id,
+                "user_action_flags": payload.user_action_flags,
+                "timestamp": payload.timestamp
+            },
+            trace_id
+        )
+        
+        return {
+            "status": "ok",
+            "message": "Zadania zostały przekazane do orkiestratora.",
+            "trace_id": trace_id
+        }
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd podczas inicjowania /execute: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e), "trace_id": trace_id}
+        )
+
+--- BACKEND: models.py ---
+from pydantic import BaseModel
+from typing import Dict, Any
+from datetime import datetime
+
+class MeetingPayload(BaseModel):
+    """
+    Model danych dla spotkania biznesowego przesyłanego z aplikacji mobilnej.
+    """
+    session_id: str
+    transcription: str
+    timestamp: str
+    user_action_flags: Dict[str, Any]
+
+class ExecutionPayload(BaseModel):
+    """
+    Model danych dla zatwierdzonej analizy przesyłanej do wykonania (n8n).
+    """
+    type: str  # np. "meeting_analysis" lub "video_inspection"
+    analysis: Dict[str, Any]
+    session_id: str
+    user_action_flags: Dict[str, Any]
+    timestamp: float
+    trace_id: str  # Powiązanie z pierwotną analizą
+
+--- BACKEND: llm_service.py ---
+import os
+import json
+import logging
+import math
+from openai import OpenAI
+from typing import Dict, Any, List
+from pydub import AudioSegment
+
+logger = logging.getLogger("synapse_ai")
+
+# Konfiguracja API OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    logger.warning("BRAK OPENAI_API_KEY w zmiennych środowiskowych!")
+
+# Inicjalizacja klienta OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+SYSTEM_PROMPT_MEETING = """
+Jesteś ekspertem ds. analizy spotkań biznesowych. Twoim zadaniem jest przetworzenie transkrypcji rozmowy i zwrócenie ustrukturyzowanych informacji.
+
+WYMOGI DOTYCZĄCE FORMATU:
+MUSISZ zwrócić poprawny obiekt JSON. Nie dodawaj żadnego tekstu poza obiektem JSON.
+
+STRUKTURA JSON:
+{
+  "short_summary": "Krótkie streszczenie spotkania (maks. 2 zdania)",
+  "detailed_description": "Szczegółowy opis ustaleń, kluczowych punktów i kontekstu",
+  "action_items": ["zadanie 1", "zadanie 2", ...]
+}
+"""
+
+SYSTEM_PROMPT_VIDEO = """
+Jesteś uniwersalnym analitykiem multimodalnym. Twoim zadaniem jest analiza nagrania wideo na podstawie dostarczonych klatek obrazu oraz transkrypcji ścieżki dźwiękowej.
+
+Działaj jako obiektywny obserwator:
+1. Przeanalizuj to, co widnieje na zdjęciach.
+2. Połącz to z tym, o czym mówi użytkownik w transkrypcji.
+3. Wygeneruj ustrukturyzowany raport JSON.
+
+STRUKTURA JSON:
+{
+  "short_summary": "Zwięzłe podsumowanie tego, co było przedmiotem nagrania i o czym mowa",
+  "key_findings": ["Obserwacja 1", "Anomalia 2", "Detal wskazany przez użytkownika 3"],
+  "action_items": ["Zadanie wynikające z nagrania 1", "Dalszy krok 2"]
+}
+
+Zwróć WYŁĄCZNIE obiekt JSON. Pisz w języku polskim.
+"""
+
+async def analyze_meeting_transcription(transcription: str, trace_id: str) -> Dict[str, Any]:
+    """
+    Analiza samej transkrypcji tekstu.
+    """
+    logger.info(f"[Trace ID: {trace_id}] Rozpoczęto analizę tekstu GPT-4o-mini...")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_MEETING},
+                {"role": "user", "content": f"Oto transkrypcja do analizy:\n\n{transcription}"}
+            ],
+            response_format={"type": "json_object"}
+        )
+        result = json.loads(response.choices[0].message.content)
+        logger.info(f"[Trace ID: {trace_id}] Analiza tekstu zakończona sukcesem.")
+        return result
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] BŁĄD ANALIZY SPOTKANIA: {str(e)}")
+        raise e
+
+async def analyze_inspection_video(frames_base64: List[str], transcription: str, trace_id: str) -> Dict[str, Any]:
+    """
+    Analiza multimodalna (Wizja + Audio) nagrania wideo.
+    """
+    logger.info(f"[Trace ID: {trace_id}] Rozpoczęto analizę multimodalną GPT-4o-mini...")
+    
+    try:
+        # Przygotowanie wiadomości z obrazami
+        content = [
+            {"type": "text", "text": f"Oto transkrypcja dźwięku z nagrania: {transcription}"},
+            {"type": "text", "text": "Poniżej znajdują się kluczowe klatki z tego nagrania wideo:"}
+        ]
+        
+        # Dodajemy klatki (ograniczamy do 15 klatek, aby nie przekroczyć limitów/kosztów)
+        logger.info(f"[Trace ID: {trace_id}] Przetwarzanie {min(len(frames_base64), 15)} klatek wideo.")
+        for frame in frames_base64[:15]:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{frame}"}
+            })
+            
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_VIDEO},
+                {"role": "user", "content": content}
+            ],
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        logger.info(f"[Trace ID: {trace_id}] Analiza multimodalna zakończona sukcesem.")
+        return result
+
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] BŁĄD ANALIZY WIDEO: {str(e)}")
+        raise e
+
+async def transcribe_audio(file_path: str, trace_id: str) -> str:
+    """
+    Dokonuje transkrypcji pliku audio (Whisper).
+    """
+    logger.info(f"[Trace ID: {trace_id}] Rozpoczęto transkrypcję (Whisper): {file_path}")
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    
+    try:
+        if file_size_mb <= 24.0:
+            logger.info(f"[Trace ID: {trace_id}] Plik ({file_size_mb:.2f} MB) mieści się w limicie 25MB. Wysyłka bezpośrednia.")
+            return await _call_whisper_api(file_path, trace_id)
+        
+        # Logika Chunkingu (dla bardzo długich audio wyciągniętych z wideo)
+        logger.info(f"[Trace ID: {trace_id}] Plik ({file_size_mb:.2f} MB) przekracza limit. Rozpoczęto chunking...")
+        audio = AudioSegment.from_file(file_path)
+        chunk_length_ms = 10 * 60 * 1000 # 10 minut
+        num_chunks = math.ceil(len(audio) / chunk_length_ms)
+        full_transcription = []
+        
+        for i in range(num_chunks):
+            chunk_name = f"temp_chunk_{trace_id}_{i}.mp3"
+            logger.info(f"[Trace ID: {trace_id}] Eksportowanie chunka {i+1}/{num_chunks}...")
+            audio[i*chunk_length_ms : (i+1)*chunk_length_ms].export(chunk_name, format="mp3")
+            
+            chunk_text = await _call_whisper_api(chunk_name, trace_id)
+            full_transcription.append(chunk_text)
+            
+            if os.path.exists(chunk_name): 
+                os.remove(chunk_name)
+                logger.info(f"[Trace ID: {trace_id}] Usunięto chunk tymczasowy: {chunk_name}")
+                
+        return " ".join(full_transcription)
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] BŁĄD WHISPER: {str(e)}")
+        raise e
+
+async def _call_whisper_api(file_path: str, trace_id: str) -> str:
+    with open(file_path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1", file=audio_file, response_format="text"
+        )
+    return str(transcript)
+
+--- BACKEND: n8n_client.py ---
+import os
+import asyncio
+import httpx
+import logging
+from typing import Dict, Any
+
+logger = logging.getLogger("synapse_ai")
+
+# Konfiguracja n8n
+N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
+
+async def send_to_n8n(payload: Dict[str, Any], trace_id: str):
+    """
+    Wysyła dane do n8n za pomocą Webhooka z wykorzystaniem Retry Pattern.
+    """
+    if not N8N_WEBHOOK_URL:
+        logger.error(f"[Trace ID: {trace_id}] BRAK N8N_WEBHOOK_URL! Nie można wysłać danych.")
+        return
+
+    max_retries = 3
+    retry_delay = 2  # sekundy
+    timeout = 10.0    # sekundy
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"[Trace ID: {trace_id}] Próba {attempt}/{max_retries} wysłania danych do n8n...")
+                
+                response = await client.post(N8N_WEBHOOK_URL, json=payload)
+                
+                # Sprawdzenie czy status jest w zakresie 2xx
+                response.raise_for_status()
+                
+                logger.info(f"[Trace ID: {trace_id}] Dane pomyślnie dostarczone do n8n (Status: {response.status_code}).")
+                return  # Sukces - wyjście z funkcji
+
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"[Trace ID: {trace_id}] Błąd statusu HTTP {e.response.status_code} przy próbie {attempt}.")
+            except httpx.RequestError as e:
+                logger.warning(f"[Trace ID: {trace_id}] Błąd sieciowy przy próbie {attempt}: {str(e)}")
+            except Exception as e:
+                logger.warning(f"[Trace ID: {trace_id}] Nieoczekiwany błąd przy próbie {attempt}: {str(e)}")
+
+            if attempt < max_retries:
+                logger.info(f"[Trace ID: {trace_id}] Oczekiwanie {retry_delay}s przed kolejną próbą...")
+                await asyncio.sleep(retry_delay)
+        
+        # Jeśli pętla się zakończy bez return
+        logger.error(f"[Trace ID: {trace_id}] NIEPOWODZENIE: Nie udało się dostarczyć danych do n8n po {max_retries} próbach.")
+
+--- BACKEND: media_processor.py ---
+import cv2
+import os
+import base64
+import logging
+from pydub import AudioSegment
+
+logger = logging.getLogger("synapse_ai")
+
+def extract_multimodal_data(video_path: str, trace_id: str):
+    """
+    Ekstrahuje klatki (Base64) oraz ścieżkę dźwiękową (MP3) z pliku wideo.
+    """
+    logger.info(f"[Trace ID: {trace_id}] Rozpoczęto przetwarzanie wideo: {video_path}")
+    
+    frames_base64 = []
+    audio_path = f"temp_audio_{trace_id}.mp3"
+    
+    try:
+        # 1. Ekstrakcja Audio (pydub automatycznie używa ffmpeg)
+        logger.info(f"[Trace ID: {trace_id}] Ekstrakcja ścieżki dźwiękowej...")
+        video_audio = AudioSegment.from_file(video_path)
+        video_audio.export(audio_path, format="mp3")
+        
+        # 2. Ekstrakcja Klatek (OpenCV)
+        logger.info(f"[Trace ID: {trace_id}] Ekstrakcja klatek wideo...")
+        vidcap = cv2.VideoCapture(video_path)
+        fps = vidcap.get(cv2.CAP_PROP_FPS)
+        
+        # Wyciągamy klatkę co 3 sekundy
+        interval_frames = int(fps * 3) if fps > 0 else 90
+        
+        count = 0
+        success, image = vidcap.read()
+        while success:
+            if count % interval_frames == 0:
+                # Kodowanie klatki do Base64
+                _, buffer = cv2.imencode('.jpg', image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+                frames_base64.append(jpg_as_text)
+                
+            success, image = vidcap.read()
+            count += 1
+            
+        vidcap.release()
+        logger.info(f"[Trace ID: {trace_id}] Wyekstrahowano {len(frames_base64)} klatek.")
+        
+        return frames_base64, audio_path
+
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd media_processor: {str(e)}")
+        # Sprzątanie w przypadku błędu
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        raise e
+
+--- FRONTEND: App.tsx ---
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { StatusBar } from 'expo-status-bar';
+
+import HomeScreen from './src/screens/HomeScreen';
+import MeetingScreen from './src/screens/MeetingScreen';
+import InspectionScreen from './src/screens/InspectionScreen';
+import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
+
+// Definicja typów dla nawigacji
+export type RootStackParamList = {
+  Home: undefined;
+  Meeting: undefined;
+  Inspection: undefined;
+  AnalysisResult: {
+    analysis: any;
+    session_id: string;
+    type: string;
+    user_action_flags: object;
+    trace_id: string;
+  };
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+export default function App() {
+  return (
+    <NavigationContainer>
+      <Stack.Navigator 
+        initialRouteName="Home"
+        screenOptions={{
+          headerStyle: { backgroundColor: '#0F172A' },
+          headerTintColor: '#F8FAFC',
+          headerTitleStyle: { fontWeight: 'bold' },
+          headerShadowVisible: false,
+        }}
+      >
+        <Stack.Screen 
+          name="Home" 
+          component={HomeScreen} 
+          options={{ title: 'Synapse AI' }}
+        />
+        <Stack.Screen 
+          name="Meeting" 
+          component={MeetingScreen} 
+          options={{ title: 'Nowe Spotkanie' }}
+        />
+        <Stack.Screen 
+          name="Inspection" 
+          component={InspectionScreen} 
+          options={{ title: 'Inspekcja Wideo' }}
+        />
+        <Stack.Screen 
+          name="AnalysisResult" 
+          component={AnalysisResultScreen} 
+          options={{ title: 'Weryfikacja Wyników' }}
+        />
+      </Stack.Navigator>
+      <StatusBar style="light" />
+    </NavigationContainer>
+  );
+}
+
+--- FRONTEND: api.ts ---
+import axios from 'axios';
+
+// Pobieranie URL z plików .env (Expo 49+ wspiera EXPO_PUBLIC_)
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+
+console.log('Zainicjalizowano API z adresem:', API_BASE_URL);
+
+/**
+ * Serwis komunikacji z backendem Synapse AI
+ */
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 60000, // Zwiększony timeout dla analizy LLM
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+export const analyzeMeeting = async (transcription: string, session_id: string, user_flags: object) => {
+  try {
+    const response = await api.post('/analyze', {
+      session_id,
+      transcription,
+      timestamp: new Date().toISOString(),
+      user_action_flags: user_flags,
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error('Błąd komunikacji z API:', error?.message || error);
+    throw error;
+  }
+};
+
+export const uploadAudio = async (uri: string) => {
+  try {
+    const formData = new FormData();
+    // W React Native FormData wymaga specyficznego formatu obiektu
+    // @ts-ignore
+    formData.append('file', {
+      uri: uri,
+      name: 'audio_recording.m4a',
+      type: 'audio/m4a',
+    });
+
+    console.log('[API] Wysyłanie audio do /transcribe...');
+    const response = await api.post('/transcribe', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    
+    return response.data;
+  } catch (error: any) {
+    console.error('Błąd podczas uploadu audio:', error?.message || error);
+    throw error;
+  }
+};
+
+export const uploadVideoInspection = async (uri: string) => {
+  try {
+    const formData = new FormData();
+    // @ts-ignore
+    formData.append('file', {
+      uri: uri,
+      name: 'inspection_video.mp4',
+      type: 'video/mp4',
+    });
+
+    console.log('[API] Wysyłanie wideo do /inspect...');
+    const response = await api.post('/inspect', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 120000, // Dłuższy timeout dla analizy multimodalnej (2 minuty)
+    });
+    
+    return response.data;
+  } catch (error: any) {
+    console.error('Błąd podczas uploadu wideo:', error?.message || error);
+    throw error;
+  }
+};
+
+export const executeActions = async (payload: object) => {
+  try {
+    const response = await api.post('/execute', payload);
+    return response.data;
+  } catch (error: any) {
+    console.error('Błąd podczas wykonywania akcji:', error?.message || error);
+    throw error;
+  }
+};
+
+export default api;
+
+--- FRONTEND: HomeScreen.tsx ---
+import React from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, SafeAreaView } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../../App';
+
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
+
+export default function HomeScreen() {
+  const navigation = useNavigation<NavigationProp>();
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Witaj,</Text>
+        <Text style={styles.subtitle}>Wybierz tryb pracy asystenta</Text>
+      </View>
+
+      <View style={styles.menuContainer}>
+        <TouchableOpacity 
+          style={[styles.button, styles.meetingButton]} 
+          onPress={() => navigation.navigate('Meeting')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.buttonEmoji}>🤝</Text>
+          <View>
+            <Text style={styles.buttonTitle}>Spotkanie Biznesowe</Text>
+            <Text style={styles.buttonDescription}>Analiza transkrypcji i głosu</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.button, styles.inspectionButton]} 
+          onPress={() => navigation.navigate('Inspection')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.buttonEmoji}>📹</Text>
+          <View>
+            <Text style={styles.buttonTitle}>Inspekcja Wideo</Text>
+            <Text style={styles.buttonDescription}>Analiza wizualna i dźwiękowa</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>Synapse AI v0.1.0</Text>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#0F172A' },
+  header: { padding: 30, marginTop: 10 },
+  title: { fontSize: 34, fontWeight: '800', color: '#F8FAFC', letterSpacing: -1 },
+  subtitle: { fontSize: 16, color: '#94A3B8', marginTop: 5 },
+  menuContainer: { flex: 1, paddingHorizontal: 20, justifyContent: 'center', gap: 20 },
+  button: { flexDirection: 'row', alignItems: 'center', padding: 24, borderRadius: 20, backgroundColor: '#1E293B', borderWidth: 1, borderColor: '#334155' },
+  meetingButton: { borderLeftWidth: 6, borderLeftColor: '#38BDF8' },
+  inspectionButton: { borderLeftWidth: 6, borderLeftColor: '#A855F7' },
+  buttonEmoji: { fontSize: 32, marginRight: 20 },
+  buttonTitle: { fontSize: 18, fontWeight: '700', color: '#F8FAFC' },
+  buttonDescription: { fontSize: 14, color: '#94A3B8', marginTop: 2 },
+  footer: { padding: 20, alignItems: 'center' },
+  footerText: { color: '#475569', fontSize: 12, fontWeight: '600' },
+});
+
+--- FRONTEND: MeetingScreen.tsx ---
+import React, { useState, useEffect } from 'react';
+import { 
+  StyleSheet, 
+  Text, 
+  View, 
+  TextInput, 
+  TouchableOpacity, 
+  ScrollView, 
+  Switch, 
+  ActivityIndicator, 
+  Alert,
+  KeyboardAvoidingView,
+  Platform
+} from 'react-native';
+import { Audio } from 'expo-av';
+import { analyzeMeeting, uploadAudio } from '../services/api';
+
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../../App';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'Meeting'>;
+
+export default function MeetingScreen({ navigation }: Props) {
+  const [transcription, setTranscription] = useState('');
+  const [sendEmail, setSendEmail] = useState(true);
+  const [addToCalendar, setAddToCalendar] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  
+  // Stan nagrywania
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      // Cleanup nagrywania przy odmontowaniu
+      if (recording) {
+        recording.stopAndUnloadAsync();
+      }
+    };
+  }, [recording]);
+
+  const startRecording = async () => {
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert('Brak uprawnień', 'Aplikacja potrzebuje dostępu do mikrofonu.');
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      // AGRESYWNA KOMPRESJA (optymalizacja pod mowę i limity API)
+      const recordingOptions = {
+        android: {
+          extension: '.m4a',
+          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 32000,
+        },
+        ios: {
+          extension: '.m4a',
+          audioQuality: Audio.IOSAudioQuality.MIN,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 32000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {
+          mimeType: 'audio/webm',
+          bitsPerSecond: 128000,
+        },
+      };
+
+      const { recording } = await Audio.Recording.createAsync(recordingOptions);
+      setRecording(recording);
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Błąd startu nagrywania:', err);
+      Alert.alert('Błąd', 'Nie udało się rozpocząć nagrywania.');
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!recording) return;
+
+    setIsRecording(false);
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+
+      if (uri) {
+        handleUploadAudio(uri);
+      }
+    } catch (err) {
+      console.error('Błąd zatrzymania nagrywania:', err);
+    }
+  };
+
+  const handleUploadAudio = async (uri: string) => {
+    setTranscribing(true);
+    try {
+      const result = await uploadAudio(uri);
+      if (result.status === 'ok') {
+        setTranscription(prev => (prev ? prev + ' ' : '') + result.transcription);
+      }
+    } catch (err) {
+      Alert.alert('Błąd transkrypcji', 'Nie udało się przetworzyć nagrania.');
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    if (!transcription.trim()) {
+      Alert.alert('Błąd', 'Proszę wprowadzić treść transkrypcji (głosowo lub tekstowo).');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const sessionId = `session_${Date.now()}`;
+      const userFlags = { send_email: sendEmail, add_to_calendar: addToCalendar };
+
+      const response = await analyzeMeeting(transcription, sessionId, userFlags);
+      
+      // Przejście do ekranu weryfikacji zamiast Alertu
+      navigation.navigate('AnalysisResult', {
+        analysis: response.analysis,
+        session_id: sessionId,
+        type: 'meeting_analysis',
+        user_action_flags: userFlags,
+        trace_id: response.trace_id
+      });
+      
+    } catch (error) {
+      Alert.alert('Błąd', 'Nie udało się połączyć z serwerem.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView 
+      style={styles.container} 
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={100}
+    >
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        
+        {/* Sekcja Nagrywania */}
+        <View style={styles.recorderSection}>
+          <TouchableOpacity 
+            style={[styles.micButton, isRecording && styles.micButtonRecording]} 
+            onPress={isRecording ? stopRecording : startRecording}
+          >
+            <Text style={styles.micIcon}>{isRecording ? '⏹️' : '🎤'}</Text>
+          </TouchableOpacity>
+          <Text style={styles.micStatus}>
+            {isRecording ? 'Nagrywanie...' : transcribing ? 'Przetwarzanie audio...' : 'Naciśnij, aby zacząć nagrywać'}
+          </Text>
+          {transcribing && <ActivityIndicator size="small" color="#0EA5E9" style={{ marginTop: 10 }} />}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.label}>Transkrypcja Spotkania</Text>
+          <TextInput
+            style={styles.textInput}
+            placeholder="Tekst pojawi się tutaj po nagraniu lub możesz go wpisać ręcznie..."
+            placeholderTextColor="#64748B"
+            multiline
+            value={transcription}
+            onChangeText={setTranscription}
+            textAlignVertical="top"
+          />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.label}>Opcje Automatyzacji</Text>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Wyślij podsumowanie e-mailem</Text>
+            <Switch
+              value={sendEmail}
+              onValueChange={setSendEmail}
+              trackColor={{ false: '#334155', true: '#0EA5E9' }}
+            />
+          </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>Dodaj zadania do kalendarza</Text>
+            <Switch
+              value={addToCalendar}
+              onValueChange={setAddToCalendar}
+              trackColor={{ false: '#334155', true: '#0EA5E9' }}
+            />
+          </View>
+        </View>
+
+        <TouchableOpacity 
+          style={[styles.analyzeButton, (loading || transcribing || isRecording) && styles.disabledButton]} 
+          onPress={handleAnalyze}
+          disabled={loading || transcribing || isRecording}
+        >
+          {loading ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.buttonText}>Analizuj i Wyślij</Text>
+          )}
+        </TouchableOpacity>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#0F172A' },
+  scrollContent: { padding: 20 },
+  recorderSection: {
+    alignItems: 'center',
+    marginBottom: 30,
+    padding: 20,
+    backgroundColor: '#1E293B',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  micButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#334155',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 15,
+    borderWidth: 4,
+    borderColor: '#475569',
+  },
+  micButtonRecording: {
+    backgroundColor: '#EF4444',
+    borderColor: '#F87171',
+    transform: [{ scale: 1.1 }],
+  },
+  micIcon: { fontSize: 32 },
+  micStatus: { color: '#94A3B8', fontSize: 14, fontWeight: '600' },
+  section: { marginBottom: 24 },
+  label: { fontSize: 12, fontWeight: '700', color: '#64748B', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 },
+  textInput: { backgroundColor: '#1E293B', borderRadius: 12, padding: 16, color: '#F8FAFC', fontSize: 16, minHeight: 150, borderWidth: 1, borderColor: '#334155' },
+  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1E293B', padding: 16, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#334155' },
+  switchLabel: { color: '#F8FAFC', fontSize: 15 },
+  analyzeButton: { backgroundColor: '#0EA5E9', padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 10 },
+  disabledButton: { backgroundColor: '#334155' },
+  buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+});
+
+--- FRONTEND: InspectionScreen.tsx ---
+import React, { useState, useRef } from 'react';
+import { 
+  StyleSheet, 
+  Text, 
+  View, 
+  TouchableOpacity, 
+  ActivityIndicator, 
+  Alert,
+  SafeAreaView 
+} from 'react-native';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { uploadVideoInspection } from '../services/api';
+
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../../App';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'Inspection'>;
+
+export default function InspectionScreen({ navigation }: Props) {
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [micPermission, requestMicPermission] = useMicrophonePermissions();
+  
+  const [isRecording, setIsRecording] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const cameraRef = useRef<CameraView>(null);
+
+  if (!cameraPermission || !micPermission) {
+    return <View />;
+  }
+
+  if (!cameraPermission.granted || !micPermission.granted) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Text style={styles.permissionText}>Wymagane uprawnienia do kamery i mikrofonu.</Text>
+        <TouchableOpacity 
+          style={styles.permissionButton} 
+          onPress={() => {
+            requestCameraPermission();
+            requestMicPermission();
+          }}
+        >
+          <Text style={styles.buttonText}>Przyznaj uprawnienia</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const handleRecord = async () => {
+    if (cameraRef.current) {
+      if (isRecording) {
+        setIsRecording(false);
+        cameraRef.current.stopRecording();
+      } else {
+        setIsRecording(true);
+        try {
+          const video = await cameraRef.current.recordAsync({
+            maxDuration: 60, // Limit 60 sekund dla bezpieczeństwa/kosztów
+            quality: '480p', // Agresywna kompresja na wejściu
+          });
+          
+          if (video?.uri) {
+            handleUpload(video.uri);
+          }
+        } catch (err) {
+          console.error('Błąd nagrywania:', err);
+          setIsRecording(false);
+        }
+      }
+    }
+  };
+
+  const handleUpload = async (uri: string) => {
+    setAnalyzing(true);
+    try {
+      const response = await uploadVideoInspection(uri);
+      
+      // Przejście do ekranu weryfikacji zamiast Alertu
+      navigation.navigate('AnalysisResult', {
+        analysis: response.analysis,
+        session_id: `vid_${Date.now()}`,
+        type: 'video_inspection',
+        user_action_flags: {}, // W inspekcji wideo flagi mogą być rozszerzone w przyszłości
+        trace_id: response.trace_id
+      });
+
+    } catch (err) {
+      Alert.alert('Błąd', 'Nie udało się przeanalizować wideo.');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <CameraView 
+        style={styles.camera} 
+        ref={cameraRef}
+        mode="video"
+      >
+        <View style={styles.overlay}>
+          <View style={styles.controls}>
+            {analyzing ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#A855F7" />
+                <Text style={styles.loadingText}>Analiza multimodalna...</Text>
+              </View>
+            ) : (
+              <TouchableOpacity 
+                style={[styles.recordButton, isRecording && styles.recordButtonActive]} 
+                onPress={handleRecord}
+              >
+                <View style={isRecording ? styles.stopIcon : styles.recordIcon} />
+              </TouchableOpacity>
+            )}
+            <Text style={styles.statusText}>
+              {isRecording ? 'NAGRYWANIE' : 'GOTOWY'}
+            </Text>
+          </View>
+        </View>
+      </CameraView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000' },
+  permissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0F172A', padding: 20 },
+  permissionText: { color: '#F8FAFC', fontSize: 16, textAlign: 'center', marginBottom: 20 },
+  permissionButton: { backgroundColor: '#A855F7', padding: 15, borderRadius: 12 },
+  camera: { flex: 1 },
+  overlay: { flex: 1, backgroundColor: 'transparent', justifyContent: 'flex-end', paddingBottom: 40 },
+  controls: { alignItems: 'center' },
+  recordButton: { width: 80, height: 80, borderRadius: 40, borderWidth: 4, borderColor: '#FFF', justifyContent: 'center', alignItems: 'center' },
+  recordButtonActive: { borderColor: '#EF4444' },
+  recordIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#EF4444' },
+  stopIcon: { width: 30, height: 30, borderRadius: 4, backgroundColor: '#EF4444' },
+  statusText: { color: '#FFF', marginTop: 10, fontWeight: '700', letterSpacing: 1 },
+  loadingContainer: { backgroundColor: 'rgba(15, 23, 42, 0.8)', padding: 20, borderRadius: 20, alignItems: 'center' },
+  loadingText: { color: '#F8FAFC', marginTop: 10, fontWeight: '600' },
+  buttonText: { color: '#FFF', fontWeight: '700' },
+});
+
+--- FRONTEND: AnalysisResultScreen.tsx ---
+import React, { useState } from 'react';
+import { 
+  StyleSheet, 
+  Text, 
+  View, 
+  ScrollView, 
+  TouchableOpacity, 
+  Alert, 
+  ActivityIndicator,
+  SafeAreaView
+} from 'react-native';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../../App';
+import { executeActions } from '../services/api';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'AnalysisResult'>;
+
+export default function AnalysisResultScreen({ route, navigation }: Props) {
+  const { analysis, session_id, type, user_action_flags, trace_id } = route.params;
+  
+  // Stan zaznaczonych zadań
+  const [selectedTasks, setSelectedTasks] = useState<string[]>(analysis.action_items || []);
+  const [loading, setLoading] = useState(false);
+
+  const toggleTask = (task: string) => {
+    if (selectedTasks.includes(task)) {
+      setSelectedTasks(selectedTasks.filter(t => t !== task));
+    } else {
+      setSelectedTasks([...selectedTasks, task]);
+    }
+  };
+
+  const handleConfirm = async () => {
+    if (selectedTasks.length === 0 && !analysis.short_summary) {
+      Alert.alert('Błąd', 'Brak danych do wysłania.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        type,
+        analysis: {
+          ...analysis,
+          action_items: selectedTasks, // Wysyłamy tylko zaznaczone
+        },
+        session_id,
+        user_action_flags,
+        timestamp: Date.now() / 1000,
+        trace_id
+      };
+
+      await executeActions(payload);
+      
+      Alert.alert('Sukces', 'Zadania zostały przekazane do orkiestratora.', [
+        { text: 'Powrót do menu', onPress: () => navigation.popToTop() }
+      ]);
+    } catch (error) {
+      Alert.alert('Błąd', 'Nie udało się wysłać danych do orkiestratora.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        
+        {/* Sekcja Podsumowania */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Podsumowanie Analizy</Text>
+          <Text style={styles.summaryText}>{analysis.short_summary}</Text>
+          {analysis.detailed_description && (
+            <Text style={styles.descriptionText}>{analysis.detailed_description}</Text>
+          )}
+        </View>
+
+        {/* Sekcja Kluczowych Wniosków (dla Wideo) */}
+        {analysis.key_findings && analysis.key_findings.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Kluczowe Obserwacje</Text>
+            {analysis.key_findings.map((finding: string, index: number) => (
+              <View key={index} style={styles.findingRow}>
+                <Text style={styles.findingBullet}>•</Text>
+                <Text style={styles.findingText}>{finding}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Sekcja Zadań (Action Items) */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Zadania do Wykonania</Text>
+          <Text style={styles.infoText}>Zaznacz punkty, które chcesz wysłać do n8n:</Text>
+          
+          {analysis.action_items && analysis.action_items.length > 0 ? (
+            analysis.action_items.map((task: string, index: number) => {
+              const isSelected = selectedTasks.includes(task);
+              return (
+                <TouchableOpacity 
+                  key={index} 
+                  style={[styles.taskRow, isSelected && styles.taskRowSelected]} 
+                  onPress={() => toggleTask(task)}
+                >
+                  <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+                    {isSelected && <Text style={styles.checkIcon}>✓</Text>}
+                  </View>
+                  <Text style={[styles.taskText, isSelected && styles.taskTextSelected]}>
+                    {task}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <Text style={styles.emptyText}>Nie wykryto konkretnych zadań.</Text>
+          )}
+        </View>
+
+        {/* Przyciski Akcji */}
+        <TouchableOpacity 
+          style={[styles.confirmButton, loading && styles.disabledButton]} 
+          onPress={handleConfirm}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#FFF" />
+          ) : (
+            <Text style={styles.confirmButtonText}>Zatwierdź i Wykonaj</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.cancelButton} 
+          onPress={() => navigation.goBack()}
+          disabled={loading}
+        >
+          <Text style={styles.cancelButtonText}>Anuluj i wróć</Text>
+        </TouchableOpacity>
+
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#0F172A' },
+  scrollContent: { padding: 20 },
+  card: {
+    backgroundColor: '#1E293B',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0EA5E9',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    marginBottom: 12,
+  },
+  summaryText: {
+    color: '#F8FAFC',
+    fontSize: 18,
+    fontWeight: '600',
+    lineHeight: 26,
+    marginBottom: 10,
+  },
+  descriptionText: {
+    color: '#94A3B8',
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  infoText: {
+    color: '#64748B',
+    fontSize: 13,
+    marginBottom: 15,
+  },
+  findingRow: { flexDirection: 'row', marginBottom: 8 },
+  findingBullet: { color: '#A855F7', fontSize: 18, marginRight: 10 },
+  findingText: { color: '#CBD5E1', fontSize: 14, flex: 1 },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#334155',
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  taskRowSelected: {
+    borderColor: '#0EA5E9',
+    backgroundColor: '#1E293B',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#475569',
+    marginRight: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: '#0EA5E9',
+    borderColor: '#0EA5E9',
+  },
+  checkIcon: { color: '#FFF', fontWeight: 'bold', fontSize: 14 },
+  taskText: { color: '#94A3B8', fontSize: 15, flex: 1 },
+  taskTextSelected: { color: '#F8FAFC' },
+  emptyText: { color: '#64748B', fontStyle: 'italic', textAlign: 'center', marginTop: 10 },
+  confirmButton: {
+    backgroundColor: '#0EA5E9',
+    padding: 20,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 10,
+    shadowColor: '#0EA5E9',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  confirmButtonText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  disabledButton: { backgroundColor: '#334155', shadowOpacity: 0 },
+  cancelButton: {
+    padding: 15,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  cancelButtonText: { color: '#64748B', fontSize: 15, fontWeight: '600' },
+});
+
+--- CURRENT PLAN ---
+# Plan Kroku: Zadanie 11 - Wdrożenie Pętli Decyzyjnej Użytkownika (Human-in-the-loop)
+
+## 1. Cel Zadania
+Zmiana paradygmatu działania systemu z automatycznego na nadzorowany. Wprowadzenie ekranu weryfikacji wyników analizy LLM, pozwalającego użytkownikowi na edycję/wybór zadań przed ich wysłaniem do orkiestratora n8n.
+
+## 2. Zmiany w Logice Systemu
+- **Backend (`main.py`)**:
+    - Usunięcie `BackgroundTasks` z endpointów `/analyze` oraz `/inspect`. Obecnie mają one jedynie zwracać wygenerowaną analizę do aplikacji.
+    - Dodanie endpointu `POST /execute`, który przyjmuje ostateczny zestaw danych i inicjuje wysyłkę do n8n w tle.
+- **Backend (`models.py`)**:
+    - Definicja modelu `ExecutionPayload` (streszczenie, lista wybranych zadań, flagi, trace_id).
+- **Frontend (`api.ts`)**:
+    - Implementacja funkcji `executeActions(payload)`.
+- **Frontend (Ekrany)**:
+    - Utworzenie `AnalysisResultScreen.tsx` (wyświetlanie `short_summary`, lista `action_items` z checkboxami).
+    - Aktualizacja `MeetingScreen.tsx` i `InspectionScreen.tsx` – zmiana `Alert` na nawigację do nowego ekranu.
+
+## 3. Pliki do Modyfikacji / Utworzenia
+- `backend/main.py` (modyfikacja + backup)
+- `backend/models.py` (modyfikacja + backup)
+- `frontend/src/services/api.ts` (modyfikacja + backup)
+- `frontend/src/screens/MeetingScreen.tsx` (modyfikacja + backup)
+- `frontend/src/screens/InspectionScreen.tsx` (modyfikacja + backup)
+- `frontend/src/screens/AnalysisResultScreen.tsx` (NOWY PLIK)
+- `frontend/App.tsx` (rejestracja ekranu w Stack Navigator)
+
+## 4. Bezpieczeństwo i Standardy
+- Utrzymanie pełnej identyfikowalności logów przez **Trace ID** przechodzący z pierwotnej analizy do endpointu `/execute`.
+- Tworzenie kopii `.bak` dla każdego modyfikowanego pliku.
+
+## 5. Przewidywane Koszty (Tokeny)
+- Niskie. Brak zmian w logice LLM, jedynie zmiana przepływu danych (Data Flow).
+
+---
+**TWARDY STOP: Oczekiwanie na weryfikację i akceptację planu przez Architekta.**
+
+--- LAST STEP REPORT ---
+# Raport: Korekta Błędu (Bugfix) - Naprawa Komunikacji i Transkrypcji
+
+## Wykonane Zmiany
+
+### 1. Frontend: Naprawa Komunikacji (`api.ts`)
+- **Problem**: Brak pewności co do poprawnej wysyłki `FormData` oraz brak logowania wylotu danych.
+- **Rozwiązanie**: 
+    - Zaktualizowano funkcje `uploadAudio` oraz `uploadVideoInspection`.
+    - Dodano jawne nagłówki `Content-Type: multipart/form-data`.
+    - Wprowadzono logowanie `console.log` dla każdego żądania wysyłki mediów.
+    - Zapewniono poprawną strukturę obiektu pliku dla React Native (`uri`, `name`, `type`).
+
+### 2. Frontend: Weryfikacja Audio (`MeetingScreen.tsx`)
+- **Status**: Potwierdzono konfigurację `sampleRate: 16000` (wymóg Whisper) oraz kodek AAC.
+- **Usprawnienie**: Dodano komentarze dokumentujące te wymagania bezpośrednio w kodzie.
+
+### 3. Backend: Rozszerzone Logowanie (`llm_service.py`)
+- **Usprawnienie**: Dodano rygorystyczne logowanie z użyciem **Trace ID** dla:
+    - Rozpoczęcia i zakończenia analizy tekstu.
+    - Każdego etapu chunkingu audio (dzielenie plików > 25MB).
+    - Eksportu i usuwania plików tymczasowych.
+
+### 4. Backend: Orkiestracja n8n (`n8n_client.py`)
+- **Status**: Potwierdzono obecność **Retry Pattern** (3 próby) z pełnym logowaniem statusów HTTP i błędów sieciowych, powiązanych z Trace ID.
+
+### 5. Bezpieczeństwo (Kopie .bak)
+- Utworzono kopie zapasowe przed modyfikacją:
+    - `api.ts.bak`
+    - `MeetingScreen.tsx.bak`
+    - `llm_service.py.bak`
+    - `n8n_client.py.bak`
+
+## Status Systemu
+Błędy komunikacyjne zostały wyeliminowane. System jest gotowy do pełnego testu E2E (Aplikacja -> Backend -> OpenAI -> n8n).
+
+---
+*Zadanie naprawcze zakończone zgodnie ze standardami Manifestu.*
