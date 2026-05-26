@@ -46,8 +46,8 @@ export const uploadAudio = async (uri: string) => {
       type: 'audio/m4a',
     });
 
-    console.log('[API] Wysyłanie audio (fetch) do /transcribe...');
-    const response = await fetch(`${API_BASE_URL}/transcribe`, {
+    console.log('[API] Wysyłanie audio (fetch) do /upload-audio...');
+    const response = await fetch(`${API_BASE_URL}/upload-audio`, {
       method: 'POST',
       body: formData,
       headers: {

@@ -175,15 +175,21 @@ export default function HomeScreen() {
 
             {/* Opcja 1: Inspekcja Budowlana */}
             <TouchableOpacity 
-              style={styles.optionCard}
-              onPress={() => handleNavigate('Inspection')}
-              activeOpacity={0.7}
+              style={[styles.optionCard, styles.disabledOptionCard]}
+              onPress={() => {}}
+              disabled={true}
+              activeOpacity={0.5}
             >
               <View style={[styles.iconContainer, styles.purpleIconBg]}>
                 <Ionicons name="videocam" size={24} color="#7C3AED" />
               </View>
               <View style={styles.optionTextContainer}>
-                <Text style={styles.optionTitle}>Inspekcja Budowlana</Text>
+                <View style={styles.optionTitleContainer}>
+                  <Text style={styles.optionTitle}>Inspekcja Budowlana</Text>
+                  <View style={styles.badgeSoon}>
+                    <Text style={styles.badgeSoonText}>Wkrótce</Text>
+                  </View>
+                </View>
                 <Text style={styles.optionDesc}>Wideo z budowy, automatyczna detekcja usterek i raport AI.</Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
@@ -207,15 +213,21 @@ export default function HomeScreen() {
 
             {/* Opcja 3: Szybka Notatka AI */}
             <TouchableOpacity 
-              style={styles.optionCard}
-              onPress={() => handleNavigate('QuickNote')}
-              activeOpacity={0.7}
+              style={[styles.optionCard, styles.disabledOptionCard]}
+              onPress={() => {}}
+              disabled={true}
+              activeOpacity={0.5}
             >
               <View style={[styles.iconContainer, styles.emeraldIconBg]}>
                 <Ionicons name="document-text" size={24} color="#10B981" />
               </View>
               <View style={styles.optionTextContainer}>
-                <Text style={styles.optionTitle}>Szybka Notatka AI</Text>
+                <View style={styles.optionTitleContainer}>
+                  <Text style={styles.optionTitle}>Szybka Notatka AI</Text>
+                  <View style={styles.badgeSoon}>
+                    <Text style={styles.badgeSoonText}>Wkrótce</Text>
+                  </View>
+                </View>
                 <Text style={styles.optionDesc}>Podyktuj szybką uwagę. AI natychmiast wygeneruje podsumowanie.</Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
@@ -350,6 +362,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     marginBottom: 12,
+  },
+  disabledOptionCard: {
+    opacity: 0.5,
+  },
+  badgeSoon: {
+    backgroundColor: '#E2E8F0',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginLeft: 8,
+  },
+  badgeSoonText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+    textTransform: 'uppercase',
+  },
+  optionTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
   },
   iconContainer: {
     width: 48,

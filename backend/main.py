@@ -8,11 +8,12 @@ import time
 import logging
 import os
 import shutil
+from supabase import create_client, Client
 
 # Załadowanie zmiennych środowiskowych przed importami modułów zależnych od .env
 load_dotenv()
 
-from models import MeetingPayload
+from models import MeetingPayload, AskRequest
 import llm_service
 import media_processor
 
@@ -151,6 +152,213 @@ async def inspect_video_endpoint(request: Request, background_tasks: BackgroundT
             if path and os.path.exists(path):
                 os.remove(path)
                 logger.info(f"[Trace ID: {trace_id}] Usunięto plik tymczasowy: {path}")
+
+# Inicjalizacja klienta Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase_client = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Pomyślnie zainicjalizowano klienta Supabase.")
+    except Exception as e:
+        logger.error(f"Błąd inicjalizacji klienta Supabase: {str(e)}")
+else:
+    logger.warning("Brak SUPABASE_URL lub SUPABASE_KEY w pliku .env! Zapis do bazy danych będzie pominięty.")
+
+async def process_audio_in_background(temp_file_path: str, trace_id: str):
+    logger.info(f"[Trace ID: {trace_id}] [Background] Rozpoczęto przetwarzanie w tle dla pliku: {temp_file_path}")
+    try:
+        # 1. Transkrypcja Deepgram
+        transcription_text = await llm_service.transcribe_audio(temp_file_path, trace_id)
+        
+        # 2. Analiza LLM
+        analysis_result = await llm_service.analyze_meeting_transcription(transcription_text, trace_id)
+        
+        short_summary = analysis_result.get("short_summary", "")
+        detailed_description = analysis_result.get("detailed_description", "")
+        action_items = analysis_result.get("action_items", [])
+        
+        # Generowanie tytułu spotkania na bazie czasu
+        title = f"Spotkanie {time.strftime('%Y-%m-%d %H:%M')}"
+        if short_summary:
+            title += f" - {short_summary[:50]}..."
+            
+        logger.info(f"[Trace ID: {trace_id}] [Background] Wyniki analizy uzyskane. Zapis do Supabase...")
+        
+        # 3. Zapis do Supabase w bloku try-except dla odporności na błędy bazy
+        meeting_id = None
+        if supabase_client:
+            try:
+                meeting_payload = {
+                    "title": title,
+                    "transcription": transcription_text,
+                    "short_summary": short_summary,
+                    "detailed_description": detailed_description
+                }
+                meeting_res = supabase_client.table("meetings").insert(meeting_payload).execute()
+                
+                if meeting_res.data and len(meeting_res.data) > 0:
+                    meeting_id = meeting_res.data[0]["id"]
+                    logger.info(f"[Trace ID: {trace_id}] [Background] Zapisano spotkanie w Supabase. ID: {meeting_id}")
+                    
+                    # Zapis action items
+                    if action_items:
+                        items_payload = []
+                        for item in action_items:
+                            if isinstance(item, dict):
+                                task_description = item.get("task_description", "")
+                                assignee = item.get("assignee")
+                            else:
+                                task_description = str(item)
+                                assignee = None
+                                
+                            if task_description:
+                                items_payload.append({
+                                    "meeting_id": meeting_id,
+                                    "task_description": task_description,
+                                    "assignee": assignee,
+                                    "status": "Otwarty"
+                                })
+                        
+                        if items_payload:
+                            supabase_client.table("action_items").insert(items_payload).execute()
+                            logger.info(f"[Trace ID: {trace_id}] [Background] Zapisano {len(items_payload)} zadań w Supabase.")
+                else:
+                    logger.error(f"[Trace ID: {trace_id}] [Background] Supabase nie zwrócił danych po zapisie spotkania.")
+            except Exception as db_err:
+                logger.error(f"[Trace ID: {trace_id}] [Background] BŁĄD BAZY SUPABASE: {str(db_err)}")
+        else:
+            logger.warning(f"[Trace ID: {trace_id}] [Background] Zapis pominięty - brak klienta Supabase.")
+
+        # 4. Wektoryzacja transkrypcji (RAG pgvector)
+        if meeting_id and transcription_text:
+            try:
+                import vector_service
+                logger.info(f"[Trace ID: {trace_id}] [Background] Rozpoczynam wektoryzację transkrypcji...")
+                chunks = vector_service.chunk_text(transcription_text)
+                if chunks:
+                    embeddings = vector_service.generate_embeddings(chunks)
+                    if len(chunks) == len(embeddings) and supabase_client:
+                        chunks_payload = [
+                            {
+                                "meeting_id": meeting_id,
+                                "chunk_text": txt,
+                                "embedding": emb
+                            }
+                            for txt, emb in zip(chunks, embeddings)
+                        ]
+                        supabase_client.table("transcript_chunks").insert(chunks_payload).execute()
+                        logger.info(f"[Trace ID: {trace_id}] [Background] Zapisano {len(chunks_payload)} wektorów fragmentów transkrypcji w Supabase.")
+                    else:
+                        logger.error(f"[Trace ID: {trace_id}] [Background] Niezgodność liczby fragmentów ({len(chunks)}) i wektorów ({len(embeddings)}).")
+            except Exception as vec_err:
+                logger.error(f"[Trace ID: {trace_id}] [Background] BŁĄD PODCZAS WEKTORYZACJI: {str(vec_err)}")
+
+        # 5. Wysyłka powiadomienia e-mail (w osobnym bloku try-except)
+        if meeting_id:
+            try:
+                import email_service
+                logger.info(f"[Trace ID: {trace_id}] [Background] Rozpoczynam wysyłkę e-maila z podsumowaniem...")
+                email_service.send_meeting_summary_email(
+                    meeting_title=title,
+                    short_summary=short_summary,
+                    action_items=action_items,
+                    meeting_id=str(meeting_id)
+                )
+            except Exception as email_err:
+                logger.error(f"[Trace ID: {trace_id}] [Background] BŁĄD PODCZAS INICJALIZACJI WYSYŁKI E-MAIL: {str(email_err)}")
+            
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] [Background] Krytyczny błąd przetwarzania w tle: {str(e)}")
+    finally:
+        # Zawsze sprzątamy plik tymczasowy
+        if os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                logger.info(f"[Trace ID: {trace_id}] [Background] Usunięto plik tymczasowy: {temp_file_path}")
+            except Exception as rm_err:
+                logger.error(f"[Trace ID: {trace_id}] [Background] Błąd usuwania pliku tymczasowego: {str(rm_err)}")
+
+@app.post("/upload-audio")
+async def upload_audio_endpoint(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...)
+):
+    trace_id = request.state.trace_id
+    logger.info(f"[Trace ID: {trace_id}] Nowy upload audio: {file.filename}")
+    
+    temp_file_path = f"temp_{trace_id}_{file.filename}"
+    try:
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        background_tasks.add_task(process_audio_in_background, temp_file_path, trace_id)
+        logger.info(f"[Trace ID: {trace_id}] Dodano zadanie tła. Zwracam natychmiastową odpowiedź.")
+        
+        return {
+            "status": "success",
+            "message": "Analiza w toku / Zapisano",
+            "trace_id": trace_id
+        }
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd podczas inicjalizacji /upload-audio: {str(e)}")
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Nie udało się rozpocząć procesowania pliku", "trace_id": trace_id}
+        )
+
+@app.post("/ask")
+async def ask_question_endpoint(payload: AskRequest, request: Request):
+    trace_id = request.state.trace_id
+    logger.info(f"[Trace ID: {trace_id}] Odebrano pytanie dla spotkania {payload.meeting_id}")
+    
+    if not supabase_client:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": "Klient Supabase nie jest zainicjalizowany", "trace_id": trace_id}
+        )
+        
+    try:
+        import vector_service
+        # 1. Wyszukanie odpowiedniego kontekstu
+        context = vector_service.retrieve_context(
+            question=payload.question,
+            meeting_id=payload.meeting_id,
+            supabase_client=supabase_client
+        )
+        
+        # Jeśli brak powiązanych fragmentów, kończymy bez uruchamiania LLM
+        if not context:
+            logger.info(f"[Trace ID: {trace_id}] Brak powiązanego kontekstu dla pytania.")
+            return {
+                "status": "success",
+                "answer": "Niestety, nie odnaleziono powiązanych informacji w transkrypcji tego spotkania, które mogłyby odpowiedzieć na to pytanie.",
+                "trace_id": trace_id
+            }
+            
+        # 2. Generowanie odpowiedzi na podstawie kontekstu
+        answer = await llm_service.answer_question_with_context(
+            question=payload.question,
+            context=context,
+            trace_id=trace_id
+        )
+        
+        return {
+            "status": "success",
+            "answer": answer,
+            "trace_id": trace_id
+        }
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd podczas obsługi /ask: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Wystąpił błąd podczas generowania odpowiedzi: {str(e)}", "trace_id": trace_id}
+        )
 
 @app.post("/analyze")
 async def analyze_meeting(payload: MeetingPayload, request: Request, background_tasks: BackgroundTasks):

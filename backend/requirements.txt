@@ -10,3 +10,4 @@ opencv-python-headless==4.9.0.80
 deepgram-sdk==7.1.1
 pydub==0.25.1
 numpy<2
+supabase==2.5.0

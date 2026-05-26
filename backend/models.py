@@ -11,3 +11,10 @@ class MeetingPayload(BaseModel):
     timestamp: str
     user_action_flags: Dict[str, Any]
 
+class AskRequest(BaseModel):
+    """
+    Model danych dla zapytania konwersacyjnego RAG.
+    """
+    meeting_id: str
+    question: str
+

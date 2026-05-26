@@ -31,7 +31,12 @@ STRUKTURA JSON:
 {
   "short_summary": "Krótkie streszczenie spotkania (maks. 2 zdania)",
   "detailed_description": "Szczegółowy opis ustaleń, kluczowych punktów i kontekstu. Uwzględnij kto co powiedział jeśli to istotne.",
-  "action_items": ["zadanie 1 (przypisane do X)", "zadanie 2", ...]
+  "action_items": [
+    {
+      "task_description": "Dokładny opis zadania do wykonania",
+      "assignee": "Imię/nazwisko osoby przypisanej lub null jeśli nie określono osoby w transkrypcji"
+    }
+  ]
 }
 """
 
@@ -189,4 +194,37 @@ async def transcribe_audio(file_path: str, trace_id: str) -> str:
 
     except Exception as e:
         logger.error(f"[Trace ID: {trace_id}] BŁĄD DEEPGRAM: {str(e)}")
+        raise e
+
+SYSTEM_PROMPT_CONVERSATIONAL = """
+Jesteś pomocnym asystentem AI analizującym spotkanie biznesowe. Odpowiadasz na pytania użytkownika WYŁĄCZNIE na podstawie dostarczonego kontekstu z narady.
+
+REGUŁY ODPOWIEDZI:
+1. Odpowiadaj WYŁĄCZNIE na podstawie poniższego kontekstu (wypowiedzi uczestników).
+2. Jeśli odpowiedzi nie ma w kontekście, poinformuj o tym wprost i grzecznie (np. "Niestety, nie ma informacji na ten temat w dostarczonym kontekście spotkania"). Nie zmyślaj ani nie dodawaj żadnych informacji z zewnątrz.
+3. Zachowaj obiektywny, profesjonalny ton. Pisz w języku polskim.
+"""
+
+async def answer_question_with_context(question: str, context: str, trace_id: str) -> str:
+    """
+    Generuje odpowiedź na pytanie użytkownika na podstawie dostarczonego kontekstu przy użyciu GPT-4o-mini.
+    Wymusza temperature=0.0 w celu eliminacji halucynacji.
+    """
+    logger.info(f"[Trace ID: {trace_id}] Uruchomienie GPT-4o-mini do wygenerowania odpowiedzi na pytanie...")
+    try:
+        user_content = f"KONTEKST SPOTKANIA:\n{context}\n\nPYTANIE: {question}"
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_CONVERSATIONAL},
+                {"role": "user", "content": user_content}
+            ],
+            temperature=0.0
+        )
+        answer = response.choices[0].message.content.strip()
+        logger.info(f"[Trace ID: {trace_id}] Pomyślnie wygenerowano odpowiedź na bazie kontekstu.")
+        return answer
+    except Exception as e:
+        logger.error(f"[Trace ID: {trace_id}] Błąd podczas generowania odpowiedzi LLM: {str(e)}")
         raise e
