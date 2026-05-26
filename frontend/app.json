@@ -27,7 +27,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-mail-composer"
+      "expo-mail-composer",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Aplikacja potrzebuje dostępu do kalendarza, aby dodawać zadania ze spotkań."
+        }
+      ]
     ]
   }
 }

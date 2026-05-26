@@ -191,7 +191,7 @@ export default function MeetingScreen({ navigation }: Props) {
             <Switch
               value={sendEmail}
               onValueChange={setSendEmail}
-              trackColor={{ false: '#334155', true: '#0EA5E9' }}
+              trackColor={{ false: '#E2E8F0', true: '#0EA5E9' }}
             />
           </View>
           <View style={styles.switchRow}>
@@ -199,7 +199,7 @@ export default function MeetingScreen({ navigation }: Props) {
             <Switch
               value={addToCalendar}
               onValueChange={setAddToCalendar}
-              trackColor={{ false: '#334155', true: '#0EA5E9' }}
+              trackColor={{ false: '#E2E8F0', true: '#0EA5E9' }}
             />
           </View>
         </View>
@@ -221,41 +221,49 @@ export default function MeetingScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0F172A' },
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
   scrollContent: { padding: 20 },
   recorderSection: {
     alignItems: 'center',
     marginBottom: 30,
     padding: 20,
-    backgroundColor: '#1E293B',
+    backgroundColor: '#F8FAFC',
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: '#E2E8F0',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   micButton: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#334155',
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 15,
-    borderWidth: 4,
-    borderColor: '#475569',
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.4,
+    shadowRadius: 18,
+    elevation: 12,
   },
   micButtonRecording: {
     backgroundColor: '#EF4444',
-    borderColor: '#F87171',
+    shadowColor: '#EF4444',
     transform: [{ scale: 1.1 }],
   },
   micIcon: { fontSize: 32 },
-  micStatus: { color: '#94A3B8', fontSize: 14, fontWeight: '600' },
+  micStatus: { color: '#475569', fontSize: 14, fontWeight: '600' },
   section: { marginBottom: 24 },
-  label: { fontSize: 12, fontWeight: '700', color: '#64748B', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 },
-  textInput: { backgroundColor: '#1E293B', borderRadius: 12, padding: 16, color: '#F8FAFC', fontSize: 16, minHeight: 150, borderWidth: 1, borderColor: '#334155' },
-  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1E293B', padding: 16, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#334155' },
-  switchLabel: { color: '#F8FAFC', fontSize: 15 },
+  label: { fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 },
+  textInput: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, color: '#1E293B', fontSize: 16, minHeight: 150, borderWidth: 1, borderColor: '#E2E8F0' },
+  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F8FAFC', padding: 16, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#E2E8F0' },
+  switchLabel: { color: '#1E293B', fontSize: 15 },
   analyzeButton: { backgroundColor: '#0EA5E9', padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 10 },
-  disabledButton: { backgroundColor: '#334155' },
+  disabledButton: { backgroundColor: '#CBD5E1' },
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
 });

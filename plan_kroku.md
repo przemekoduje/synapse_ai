@@ -1,32 +1,29 @@
-# Plan Kroku: Zadanie 13 - Zastąpienie n8n natywną wysyłką (expo-mail-composer)
+# Plan Kroku: Zadanie 17 - Wybór Kalendarza (UI / UX)
 
 ## 1. Cel Kroku
-Całkowita eliminacja orkiestratora n8n na rzecz natywnego klienta pocztowego w urządzeniu. Aplikacja mobilna wygeneruje e-mail z podsumowaniem spotkania bez udziału serwera do dystrybucji danych. Backend FastAPI pozostaje nienaruszony pod kątem integracji z AI, ale traci endpoint `/execute`.
+1. Dodanie mechanizmu wczytywania i wyboru kalendarza systemowego w ekranie `AnalysisResultScreen.tsx`.
+2. Dodanie dedykowanej karty UI z listą dostępnych, zapisywalnych kalendarzy (wraz z ich źródłami np. Google, iCloud) i przyciskami wyboru (Radio Buttons).
+3. Zapis wydarzenia do wybranego przez użytkownika kalendarza.
 
-## 2. Planowane modyfikacje
+## 2. Pliki do modyfikacji i kopie zapasowe
+Kopie zapasowe zostały już uprzednio utworzone, jednak w razie potrzeby zostaną zaktualizowane:
+- `src/screens/AnalysisResultScreen.tsx.bak`
 
-### Frontend (React Native / Expo)
-1. **Instalacja pakietu:** 
-   *(Pakiet `expo-mail-composer` został już uprzednio zainstalowany, ale w razie potrzeby upewnimy się, że jest w `package.json`).*
-2. **Kopia zapasowa:** 
-   Utworzenie pliku `AnalysisResultScreen.tsx.bak`.
-3. **Modyfikacja `AnalysisResultScreen.tsx`:**
-   - Usunięcie importu funkcji API (np. `executeAction`).
-   - Implementacja `MailComposer.composeAsync()` z odpowiednio sformatowanym tekstem (`short_summary` + zatwierdzone `action_items`).
-   - Podpięcie nowej funkcji pod przycisk "Zatwierdź i Wykonaj".
+## 3. Planowane modyfikacje kodu
 
-### Backend (FastAPI)
-1. **Kopia zapasowa:** 
-   Utworzenie pliku `main.py.bak`.
-2. **Czyszczenie `main.py`:**
-   - Usunięcie endpointu `POST /execute`.
-   - Usunięcie modelu DTO powiązanego z `/execute` (jeśli istnieje, np. `ExecuteRequest`).
-3. **Czyszczenie plików:**
-   - Usunięcie pliku `backend/n8n_client.py` - nie jest już potrzebny w systemie.
+### Ekran Weryfikacji Wyników (`src/screens/AnalysisResultScreen.tsx`)
+- **Stany komponentu:**
+  - `calendars`: tablica wczytanych kalendarzy (`allowsModifications === true`).
+  - `selectedCalendarId`: ID wybranego kalendarza.
+- **Hook `useEffect`:**
+  - Wczytywanie kalendarzy po wejściu na ekran (jeśli `shouldAddToCalendar` jest aktywne).
+  - Domyślny wybór kalendarza `isPrimary` lub pierwszego z listy.
+- **Karta wyboru kalendarza w UI:**
+  - Dodanie sekcji "Wybór Kalendarza" z listą opcji przed przyciskiem akcji.
+  - Wykorzystanie stylizowanych przycisków radiowych (okrąg z kropką w środku).
+- **Zapis wydarzenia:**
+  - Wykorzystanie `selectedCalendarId` przekazanego bezpośrednio z UI do funkcji `createCalendarEventAsync`.
 
-## 3. Kolejność działań
-1. Tworzenie kopii bezpieczeństwa plików (`.bak`).
-2. Implementacja logiki wysyłki i formatowania maila w aplikacji (`AnalysisResultScreen.tsx`).
-3. Sprzątanie nieużywanego kodu z backendu (`main.py` i `n8n_client.py`).
+---
 
-Oczekuję na komendę **"Dalej"**, aby przystąpić do modyfikacji plików.
+Oczekuję na weryfikację planu i komendę **"Dalej"** (TWARDY STOP).
