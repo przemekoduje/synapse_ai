@@ -49,3 +49,6 @@ frontend/yarn-error.log*
 *.m4a
 *.wav
 
+# Whitelist webapp/src/lib
+!webapp/src/lib/
+

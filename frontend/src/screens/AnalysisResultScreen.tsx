@@ -52,7 +52,7 @@ export default function AnalysisResultScreen({ route, navigation }: Props) {
         emailBody += `\n`;
       }
 
-      const webappUrl = process.env.EXPO_PUBLIC_WEBAPP_URL || 'https://app.concore.ai';
+      const webappUrl = process.env.EXPO_PUBLIC_WEBAPP_URL || 'https://app.synapse-ai.com';
       emailBody += `Pełny raport, nagranie oraz czat asystenta są dostępne pod poniższym adresem:\n`;
       emailBody += `${webappUrl}/raport/${session_id}\n`;
 

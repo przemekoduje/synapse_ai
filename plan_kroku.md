@@ -15,7 +15,7 @@ Przed rozpoczęciem prac zostaną wykonane kopie zapasowe:
 - W [frontend/.env](file:///c:/Users/Admin/Desktop/przemokoduje/kodowanie/Synapse_AI/frontend/.env) dodamy zmienną:
   `EXPO_PUBLIC_WEBAPP_URL=http://localhost:5173`
 - W [frontend/src/screens/AnalysisResultScreen.tsx](file:///c:/Users/Admin/Desktop/przemokoduje/kodowanie/Synapse_AI/frontend/src/screens/AnalysisResultScreen.tsx) zmienimy generowanie Magic Linku na:
-  `const webappUrl = process.env.EXPO_PUBLIC_WEBAPP_URL || 'https://app.concore.ai';`
+  `const webappUrl = process.env.EXPO_PUBLIC_WEBAPP_URL || 'https://app.synapse-ai.com';`
   `emailBody += '...' + webappUrl + '/raport/' + session_id;`
 
 ### B. Panel Webowy: Edycja Spotkania (`webapp/src/pages/ReportPage.tsx`)

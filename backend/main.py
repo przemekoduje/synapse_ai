@@ -32,7 +32,7 @@ ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:8081",
-    "https://app.concore.ai",
+    "https://app.synapse-ai.com",
     "https://app.twojadomena.pl"
 ]
 
@@ -298,7 +298,7 @@ async def upload_audio_endpoint(
 @app.post("/ask")
 async def ask_question_endpoint(payload: AskRequest, request: Request):
     trace_id = request.state.trace_id
-    logger.info(f"[Trace ID: {trace_id}] Odebrano pytanie dla spotkania {payload.meeting_id}")
+    logger.info(f"[Trace ID: {trace_id}] Odebrano pytanie dla spotkania {payload.meeting_id}: '{payload.question}'")
     
     if not supabase_client:
         return JSONResponse(
