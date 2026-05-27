@@ -1,66 +1,40 @@
-# Plan Kroku: Zadanie 22 - Endpoint Konwersacyjny RAG (Retrieval)
+# Plan Kroku: Zadanie 29 - Edycja Raportu w Hubie Webowym i Konfiguracja Linków Lokacji
 
 ## 1. Cel Kroku
-Implementacja mechanizmu wyszukiwania semantycznego (Retrieval) w transkrypcjach spotkań na backendzie (FastAPI) i wdrożenie nowego endpointu `POST /ask`, pozwalającego użytkownikowi zadawać pytania na temat spotkań i otrzymywać odpowiedzi oparte wyłącznie na kontekście (bez halucynacji).
+Wprowadzenie możliwości pełnej edycji i zarządzania podsumowaniem oraz zadaniami bezpośrednio z poziomu panelu webowego (Hub Raportowy) w celu umożliwienia korekty wyników analizy AI. Dodatkowo, konfiguracja dynamicznego adresu URL dla Magic Linku w aplikacji mobilnej w zależności od środowiska pracy (lokalne deweloperskie / produkcja).
 
-## 2. Procedura Supabase RPC (do uruchomienia w panelu Supabase)
-```sql
-CREATE OR REPLACE FUNCTION match_transcript_chunks(
-  query_embedding vector(1536),
-  match_meeting_id UUID,
-  match_threshold float,
-  match_count int
-)
-RETURNS TABLE (
-  id UUID,
-  meeting_id UUID,
-  chunk_text TEXT,
-  similarity float
-)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  RETURN QUERY
-  SELECT
-    transcript_chunks.id,
-    transcript_chunks.meeting_id,
-    transcript_chunks.chunk_text,
-    1 - (transcript_chunks.embedding <=> query_embedding) AS similarity
-  FROM transcript_chunks
-  WHERE transcript_chunks.meeting_id = match_meeting_id
-    AND 1 - (transcript_chunks.embedding <=> query_embedding) > match_threshold
-  ORDER BY transcript_chunks.embedding <=> query_embedding
-  LIMIT match_count;
-END;
-$$;
-```
+## 2. Pliki do modyfikacji i kopie zapasowe
+Przed rozpoczęciem prac zostaną wykonane kopie zapasowe:
+- `frontend/src/screens/AnalysisResultScreen.tsx` -> `frontend/src/screens/AnalysisResultScreen.tsx.bak`
+- `frontend/.env` -> `frontend/.env.bak`
+- `webapp/src/pages/ReportPage.tsx` -> `webapp/src/pages/ReportPage.tsx.bak`
 
-## 3. Pliki do modyfikacji i kopie zapasowe
-Przed wprowadzaniem zmian zostaną utworzone kopie zapasowe:
-- [main.py](file:///Users/przemyslawrakotny/Documents/przemokoduje/n8n_testy/synapse_ai/backend/main.py) -> `main.py.bak`
-- [vector_service.py](file:///Users/przemyslawrakotny/Documents/przemokoduje/n8n_testy/synapse_ai/backend/vector_service.py) -> `vector_service.py.bak`
-- [llm_service.py](file:///Users/przemyslawrakotny/Documents/przemokoduje/n8n_testy/synapse_ai/backend/llm_service.py) -> `llm_service.py.bak`
+## 3. Planowane modyfikacje kodu
 
-## 4. Planowane modyfikacje kodu
+### A. Dynamiczny URL dla Magic Link w Aplikacji Mobilnej
+- W [frontend/.env](file:///c:/Users/Admin/Desktop/przemokoduje/kodowanie/Synapse_AI/frontend/.env) dodamy zmienną:
+  `EXPO_PUBLIC_WEBAPP_URL=http://localhost:5173`
+- W [frontend/src/screens/AnalysisResultScreen.tsx](file:///c:/Users/Admin/Desktop/przemokoduje/kodowanie/Synapse_AI/frontend/src/screens/AnalysisResultScreen.tsx) zmienimy generowanie Magic Linku na:
+  `const webappUrl = process.env.EXPO_PUBLIC_WEBAPP_URL || 'https://app.concore.ai';`
+  `emailBody += '...' + webappUrl + '/raport/' + session_id;`
 
-### A. Rozbudowa Serwisu Wektorowego (`backend/vector_service.py`)
-- Implementacja funkcji `retrieve_context(question, meeting_id, supabase_client, match_threshold=0.3, match_count=4)`:
-  - Wektoryzacja pytania za pomocą OpenAI Embeddings.
-  - Wywołanie procedury Supabase RPC `match_transcript_chunks`.
-  - Złączenie odnalezionych fragmentów transkrypcji w spójny tekst kontekstowy.
+### B. Panel Webowy: Edycja Spotkania (`webapp/src/pages/ReportPage.tsx`)
+Zaimplementujemy kompletny interfejs edycyjny zapisujący dane w Supabase:
+1. **Edycja Nagłówka i Podsumowania:**
+   - Przycisk "Edytuj dane spotkania" przełączający pola Tytuł, Podsumowanie AI i Opis w tryb input/textarea.
+   - Walidacja zmian i przyciski "Zapisz" / "Anuluj" wykonujące operację `UPDATE` w tabeli `meetings`.
+2. **Zarządzanie Zadaniami (Action Items):**
+   - Dodanie interaktywnych kontrolek do każdego zadania:
+     - Możliwość edycji tekstu zadania (`task_description`).
+     - Możliwość edycji przypisanej osoby (`assignee`).
+     - Przełącznik statusu ("otwarte" / "zakończone" / "w toku").
+     - Przycisk "Usuń" usuwający zadanie z bazy (`DELETE` w `action_items`).
+   - Dodanie formularza "Dodaj nowe zadanie" na dole listy zadań pozwalającego na dynamiczne dopisywanie nowych punktów do bieżącego spotkania (`INSERT` w `action_items`).
 
-### B. Rozszerzenie Usług LLM (`backend/llm_service.py`)
-- Definicja rygorystycznego promptu systemowego `SYSTEM_PROMPT_CONVERSATIONAL` blokującego halucynacje.
-- Zaimplementowanie funkcji `answer_question_with_context(question, context, trace_id)` generującej odpowiedź GPT-4o-mini o niskiej temperaturze (0.0).
-
-### C. Nowy Endpoint API (`backend/main.py`)
-- Dodanie modelu Pydantic `AskRequest` (klucze `meeting_id` oraz `question`).
-- Dodanie endpointu `POST /ask`:
-  - Pobranie kontekstu poprzez `vector_service.retrieve_context`.
-  - Jeśli kontekst jest pusty, natychmiastowe zwrócenie grzecznej informacji o braku powiązanych danych.
-  - W przeciwnym razie wywołanie `llm_service.answer_question_with_context`.
-  - Zwrócenie odpowiedzi: `{"status": "success", "answer": answer, "trace_id": trace_id}`.
+## 4. Weryfikacja
+1. Sprawdzenie poprawności budowania webappu za pomocą `npm run build` w katalogu `webapp`.
+2. Manualne przetestowanie edycji tytułu, podsumowania i zadań w przeglądarce pod adresem `http://localhost:5173/raport/{meeting_id}`.
+3. Potwierdzenie zapisu zmian w bazie Supabase.
 
 ---
-
-Oczekuję na weryfikację planu i komendę **"Dalej"** (TWARDY STOP).
+**TWARDY STOP.** Oczekuję na weryfikację planu przez Architekta i komendę **"Dalej"**.

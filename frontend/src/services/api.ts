@@ -15,6 +15,7 @@ export const analyzeMeeting = async (transcription: string, session_id: string, 
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        'Bypass-Tunnel-Reminder': 'true',
       },
       body: JSON.stringify({
         session_id,
@@ -46,14 +47,25 @@ export const uploadAudio = async (uri: string) => {
       type: 'audio/m4a',
     });
 
-    console.log('[API] Wysyłanie audio (fetch) do /upload-audio...');
+    console.log('[API] Wysyłanie audio (fetch) do /upload-audio z timeoutem 90s...');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.warn('[API] Przekroczono limit czasu (90s) żądania /upload-audio. Przerywanie połączenia.');
+      controller.abort();
+    }, 90000);
+
     const response = await fetch(`${API_BASE_URL}/upload-audio`, {
       method: 'POST',
       body: formData,
       headers: {
         'Accept': 'application/json',
+        'Bypass-Tunnel-Reminder': 'true',
       },
+      signal: controller.signal,
     });
+    
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       const errorData = await response.json();
@@ -62,6 +74,10 @@ export const uploadAudio = async (uri: string) => {
 
     return await response.json();
   } catch (error: any) {
+    if (error.name === 'AbortError') {
+      console.error('Błąd podczas uploadu audio: Przekroczono limit czasu żądania (90s)');
+      throw new Error('Przekroczono limit czasu żądania (90s) - serwer przetwarza dane zbyt długo.');
+    }
     console.error('Błąd podczas uploadu audio:', error?.message || error);
     throw error;
   }
@@ -83,6 +99,7 @@ export const uploadVideoInspection = async (uri: string) => {
       body: formData,
       headers: {
         'Accept': 'application/json',
+        'Bypass-Tunnel-Reminder': 'true',
       },
     });
 

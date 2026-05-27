@@ -5,6 +5,9 @@ import { StatusBar } from 'expo-status-bar';
 
 import HomeScreen from './src/screens/HomeScreen';
 import MeetingScreen from './src/screens/MeetingScreen';
+import InspectionScreen from './src/screens/InspectionScreen';
+import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
+import QuickNoteScreen from './src/screens/QuickNoteScreen';
 
 // Definicja typów dla nawigacji
 export type RootStackParamList = {
@@ -45,6 +48,26 @@ export default function App() {
           name="Meeting" 
           component={MeetingScreen} 
           options={{ title: 'Nowe Spotkanie' }}
+        />
+        <Stack.Screen 
+          name="Inspection" 
+          component={InspectionScreen} 
+          options={{ title: 'Inspekcja Wideo' }}
+        />
+        <Stack.Screen 
+          name="QuickNote" 
+          component={QuickNoteScreen} 
+          options={{ 
+            title: 'Szybka Notatka',
+            headerStyle: { backgroundColor: '#F8FAFC' },
+            headerTintColor: '#0F172A',
+            headerTitleStyle: { fontWeight: 'bold' },
+          }}
+        />
+        <Stack.Screen 
+          name="AnalysisResult" 
+          component={AnalysisResultScreen} 
+          options={{ title: 'Weryfikacja Wyników' }}
         />
       </Stack.Navigator>
       <StatusBar style="auto" />

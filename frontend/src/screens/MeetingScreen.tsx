@@ -105,11 +105,14 @@ export default function MeetingScreen({ navigation }: Props) {
       console.log('[MeetingScreen] Rozpoczęcie wysyłki pliku audio:', uri);
       const result = await uploadAudio(uri);
       if (result.status === 'success' || result.status === 'ok') {
-        Alert.alert(
-          'Sukces',
-          'Nagranie zostało przesłane do analizy na serwerze.',
-          [{ text: 'OK', onPress: () => navigation.navigate('Home') }]
-        );
+        navigation.navigate('AnalysisResult', {
+          analysis: result.analysis,
+          transcription: result.transcription,
+          session_id: result.meeting_id || `session_${Date.now()}`,
+          type: 'meeting_analysis',
+          user_action_flags: { send_email: true, add_to_calendar: false },
+          trace_id: result.trace_id || 'unknown'
+        });
       } else {
         throw new Error(result.message || 'Nieznany błąd serwera');
       }
@@ -149,7 +152,7 @@ export default function MeetingScreen({ navigation }: Props) {
             {isRecording 
               ? 'Nagrywanie...' 
               : transcribing 
-                ? 'Przesyłanie nagrania na serwer...' 
+                ? 'Przetwarzanie AI w chmurze...' 
                 : 'Naciśnij, aby zacząć nagrywać'}
           </Text>
           {(isRecording || transcribing) && <ActivityIndicator size="small" color="#0EA5E9" style={{ marginTop: 10 }} />}

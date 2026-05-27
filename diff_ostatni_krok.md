@@ -1,37 +1,22 @@
-# Raport: Zadanie 12 - Migracja na silnik Deepgram (Diaryzacja PL)
+# Raport: Zadanie 29 - Edycja Raportu w Hubie Webowym i Konfiguracja Linków Lokacji
 
 ## Cel Zadania
-Zastąpienie modelu OpenAI Whisper dedykowanym silnikiem Deepgram (Nova-2), wprowadzenie diaryzacji (rozpoznawania mówców) oraz uproszczenie architektury backendu.
+Udostępnienie pełnej możliwości edycji podsumowania AI oraz zadań (Action Items) bezpośrednio w aplikacji webowej (Hub Raportowy) wraz z zapisem do bazy danych Supabase. Dodatkowo, wdrożenie dynamicznych Magic Linków ułatwiających lokalne testowanie.
 
-## Wykonane Zmiany
+## Zrealizowane modyfikacje
 
-### 1. Backend: Refaktoryzacja `llm_service.py`
-- **Migracja modelu**: Zastąpienie `whisper-1` modelem `nova-2`.
-- **Diaryzacja**: Wdrożenie podziału na mówców. Wynik transkrypcji jest teraz formatowany jako:
-    `Mówca 0: [tekst]`
-    `Mówca 1: [tekst]`
-- **Likwidacja długu technologicznego**:
-    - Usunięto bibliotekę `pydub`.
-    - Usunięto całą logikę `chunkingu` (dzielenia plików audio). Deepgram obsługuje duże pliki natywnie.
-- **Odporność**: Dodano bezpieczny dostęp do atrybutów mówcy (speaker), zapobiegając błędom przy niewyraźnym audio.
+### 1. Aplikacja Mobilna (Frontend)
+- **Konfiguracja linków:** Dodano zmienną `EXPO_PUBLIC_WEBAPP_URL=http://localhost:5173` do [frontend/.env](file:///c:/Users/Admin/Desktop/przemokoduje/kodowanie/Synapse_AI/frontend/.env).
+- **Zintegrowanie linków:** W [AnalysisResultScreen.tsx](file:///c:/Users/Admin/Desktop/przemokoduje/kodowanie/Synapse_AI/frontend/src/screens/AnalysisResultScreen.tsx) zaimplementowano dynamiczne budowanie linku z odczytem tej zmiennej środowiskowej.
 
-### 2. Infrastruktura i Zależności
-- **`requirements.txt`**:
-    - Usunięto `pydub`.
-    - Dodano `deepgram-sdk`.
-- **`.env`**: Dodano klucz `DEEPGRAM_API_KEY`.
+### 2. Aplikacja Webowa (Webapp)
+- **Pełny edytor spotkania:** W [ReportPage.tsx](file:///c:/Users/Admin/Desktop/przemokoduje/kodowanie/Synapse_AI/webapp/src/pages/ReportPage.tsx) dodano przycisk przełączający sekcję w tryb edycji (Tytuł, Streszczenie i Szczegółowy Opis) z zapisem zmian (`meetings.update`) do Supabase.
+- **Interaktywne Action Items:**
+  - Dodano możliwość edycji opisu zadania oraz osoby przypisanej.
+  - Wprowadzono szybką zmianę statusu zadania (poprzez kliknięcie w badge statusu) z automatycznym przełączaniem (np. Otwarty -> Zakończony).
+  - Dodano przycisk usuwania zadania z bazy danych.
+  - Zaimplementowano formularz tworzenia i dodawania nowych zadań powiązanych z danym spotkaniem.
 
-### 3. Monitoring i Traceability
-- Zachowano pełną spójność **Trace ID**.
-- Dodano logi informujące o liczbie wykrytych zmian mówców w nagraniu.
-
-## Bezpieczeństwo
-- Utworzono kopie zapasowe przed modyfikacją:
-    - `llm_service.py.bak`
-    - `requirements.txt.bak`
-
-## Status Systemu
-Backend jest znacznie lżejszy i bardziej wydajny. Transkrypcja z podziałem na role dostarcza znacznie bogatszy kontekst do analizy LLM.
-
----
-*Zadanie 12 zakończone zgodnie ze standardami Manifestu.*
+## Weryfikacja
+- Kompilacja TypeScript oraz bundling aplikacji webowej zakończyły się sukcesem (`npm run build`).
+- Wprowadzony kod bez przeszkód łączy się z bazą danych Supabase.

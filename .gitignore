@@ -44,3 +44,8 @@ frontend/dist/
 frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*
+
+# Audio recordings and temporary test files
+*.m4a
+*.wav
+
