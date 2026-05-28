@@ -28,17 +28,10 @@ logger = logging.getLogger("synapse_ai")
 
 app = FastAPI(title="Synapse AI Backend")
 # Konfiguracja CORS - kluczowa dla komunikacji z aplikacją mobilną/webową
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8081",
-    "https://app.synapse-ai.com",
-    "https://app.twojadomena.pl"
-]
-
+# Pozwalamy na wszystkie domeny HTTP/HTTPS za pomocą regexa, aby obsłużyć dynamiczne adresy Vercel/Expo
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
