@@ -21,7 +21,13 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -34,6 +40,18 @@
           "calendarPermission": "Aplikacja potrzebuje dostępu do kalendarza, aby dodawać zadania ze spotkań."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "3be975c4-fb3e-4737-9be8-2c84db958d25"
+      }
+    },
+    "owner": "przemokoduje",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/3be975c4-fb3e-4737-9be8-2c84db958d25"
+    }
   }
 }
