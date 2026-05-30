@@ -18,6 +18,7 @@ export async function signUpWithEmail(email: string, password: string, name: str
     email: email.trim().toLowerCase(),
     password,
     options: {
+      emailRedirectTo: 'synapse-ai://auth/callback',
       data: {
         full_name: name.trim(),
       },
