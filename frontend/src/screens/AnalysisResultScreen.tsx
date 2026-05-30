@@ -12,6 +12,7 @@ import {
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import * as MailComposer from 'expo-mail-composer';
+import { getCurrentUser } from '../services/auth';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AnalysisResult'>;
 
@@ -56,10 +57,14 @@ export default function AnalysisResultScreen({ route, navigation }: Props) {
       emailBody += `Pełny raport, nagranie oraz czat asystenta są dostępne pod poniższym adresem:\n`;
       emailBody += `${webappUrl}/raport/${session_id}\n`;
 
+      const currentUser = await getCurrentUser();
+      const ccRecipients = currentUser && currentUser.email ? [currentUser.email] : [];
+
       await MailComposer.composeAsync({
         subject: title,
         body: emailBody,
         recipients: [], // Puste adresy zgodnie z wymaganiami
+        ccRecipients: ccRecipients,
       });
 
     } catch (err: any) {

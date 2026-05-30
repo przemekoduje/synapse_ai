@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 
 import HomeScreen from './src/screens/HomeScreen';
+import LoginScreen from './src/screens/LoginScreen';
 import MeetingScreen from './src/screens/MeetingScreen';
 import InspectionScreen from './src/screens/InspectionScreen';
 import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
@@ -12,6 +13,7 @@ import QuickNoteScreen from './src/screens/QuickNoteScreen';
 // Definicja typów dla nawigacji
 export type RootStackParamList = {
   Home: undefined;
+  Login: undefined;
   Meeting: undefined;
   Inspection: undefined;
   QuickNote: undefined;
@@ -42,6 +44,11 @@ export default function App() {
         <Stack.Screen 
           name="Home" 
           component={HomeScreen} 
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen 
+          name="Login" 
+          component={LoginScreen} 
           options={{ headerShown: false }}
         />
         <Stack.Screen 
