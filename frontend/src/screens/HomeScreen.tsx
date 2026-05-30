@@ -20,6 +20,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { getQueue, syncQueue } from '../services/recordingQueue';
 import { uploadAudio } from '../services/api';
 import { getCurrentUser, logout } from '../services/auth';
+import * as Linking from 'expo-linking';
+import { supabase } from '../services/supabase';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -28,11 +30,36 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 export default function HomeScreen() {
   const navigation = useNavigation<NavigationProp>();
   const isFocused = useIsFocused();
+  const incomingUrl = Linking.useURL();
   
   // Stany sesji i kolejki nagrań
   const [user, setUser] = useState<any>(null);
   const [queueSize, setQueueSize] = useState(0);
   const [syncingQueue, setSyncingQueue] = useState(false);
+
+  // Nasłuchiwanie Deep Linków (OAuth callback)
+  useEffect(() => {
+    if (incomingUrl) {
+      handleDeepLink(incomingUrl);
+    }
+  }, [incomingUrl]);
+
+  const handleDeepLink = async (url: string) => {
+    console.log('[HomeScreen] Obsługa incoming Deep Link URL:', url);
+    try {
+      const parsed = Linking.parse(url);
+      const { code } = parsed.queryParams || {};
+      if (code) {
+        console.log('[HomeScreen] Znaleziono kod autoryzacji w URL, wymieniam na sesję...');
+        const { error } = await supabase.auth.exchangeCodeForSession(String(code));
+        if (error) throw error;
+        console.log('[HomeScreen] Sesja pomyślnie zsynchronizowana z kodu PKCE!');
+        await checkUser();
+      }
+    } catch (err) {
+      console.error('[HomeScreen] Błąd przetwarzania deep linka:', err);
+    }
+  };
 
   // Sprawdzanie kolejki i użytkownika po wejściu na ekran
   useEffect(() => {
