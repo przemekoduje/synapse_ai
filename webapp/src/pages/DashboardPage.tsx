@@ -34,6 +34,7 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [user, setUser] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
 
   // Statystyki
   const [stats, setStats] = useState({
@@ -44,6 +45,7 @@ export default function DashboardPage() {
 
   const fetchDashboardData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
+    setError(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
@@ -88,6 +90,7 @@ export default function DashboardPage() {
       })
     } catch (err: any) {
       console.error('[DashboardPage] Błąd pobierania danych:', err)
+      setError(err.message || 'Nie udało się pobrać danych z serwera.')
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -262,8 +265,39 @@ export default function DashboardPage() {
           />
         </div>
 
+        {/* Informacja o błędzie bazy danych */}
+        {error && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-6 shadow-xs">
+            <div className="flex items-start gap-3">
+              <div className="flex-1">
+                <h3 className="font-bold text-rose-950 mb-1 text-base">Błąd połączenia z bazą danych</h3>
+                <p className="text-sm text-rose-800 mb-4">
+                  Wystąpił problem podczas pobierania spotkań: <code className="bg-rose-100/80 px-1.5 py-0.5 rounded font-mono text-xs text-rose-950 font-bold">{error}</code>
+                </p>
+                
+                {/* Porada dotycząca brakującej migracji SQL */}
+                <div className="bg-white/80 backdrop-blur-xs border border-rose-100 rounded-xl p-4 text-xs text-slate-700 leading-relaxed max-w-2xl">
+                  <p className="font-bold text-slate-900 mb-1">Prawdopodobna przyczyna: brak kolumny `user_id` w tabeli `meetings`</p>
+                  <p className="mb-3">
+                    Aby aplikacja mogła odpytać bazę w trybie wielodostępnym, należy w bazie danych Supabase dodać kolumnę 
+                    <code className="font-mono text-indigo-650 bg-slate-100 px-1 py-0.5 rounded mx-1">user_id</code> 
+                    oraz włączyć zasady zabezpieczeń Row Level Security (RLS).
+                  </p>
+                  <p className="font-semibold text-slate-900 mb-2">Rozwiązanie:</p>
+                  <ol className="list-decimal pl-4 space-y-1 mb-3">
+                    <li>Zaloguj się do panelu <strong>Supabase Console</strong> i przejdź do swojego projektu.</li>
+                    <li>Otwórz zakładkę <strong>SQL Editor</strong> i kliknij <strong>New Query</strong>.</li>
+                    <li>Skopiuj i wklej skrypt SQL wdrożenia (znajdziesz go w planie implementacji lub dokumentacji).</li>
+                    <li>Uruchom zapytanie przyciskiem <strong>Run</strong>, a następnie kliknij przycisk <strong>Odśwież</strong> powyżej.</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Lista Spotkań */}
-        {loading ? (
+        {!error && (loading ? (
           <div className="flex-1 flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-slate-200 shadow-xs">
             <Loader2 className="w-10 h-10 animate-spin text-indigo-600 mb-4" />
             <p className="text-slate-500 font-semibold text-sm">Wczytywanie listy narad...</p>
@@ -348,7 +382,7 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-        )}
+        ))}`
       </main>
     </div>
   )

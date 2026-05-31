@@ -2,40 +2,46 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client
 
-load_dotenv(dotenv_path="backend/.env")
+# Explicit path to .env file in backend directory
+dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'backend', '.env')
+print(f"Loading .env from: {dotenv_path}")
+print(f"Exists: {os.path.exists(dotenv_path)}")
 
-url = os.getenv("SUPABASE_URL")
-key = os.getenv("SUPABASE_KEY")
+load_dotenv(dotenv_path)
 
-if not url or not key:
-    print("Missing URL or Key in .env!")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+print(f"SUPABASE_URL: {SUPABASE_URL}")
+print(f"SUPABASE_KEY exists: {bool(SUPABASE_KEY)}")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("Error: Missing SUPABASE_URL or SUPABASE_KEY in .env")
     exit(1)
 
-supabase = create_client(url, key)
-
-target_id = "473ce271-eef4-4462-a9a5-b7b7956371a9"
-m_res = supabase.table("meetings").select("*").eq("id", target_id).execute()
-if m_res.data:
-    m = m_res.data[0]
-    print(f"Title: {m.get('title')}")
-    print(f"Summary: {m.get('short_summary')}")
-    print(f"Description: {m.get('detailed_description')}")
-    print(f"Transcription: {m.get('transcription')}")
+try:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    chunks_res = supabase.table("transcript_chunks").select("*").eq("meeting_id", target_id).execute()
-    print("Chunks:")
-    for c in chunks_res.data or []:
-        print(f"  - Text: {c.get('chunk_text')}")
-        # Embedding length can be counted if it is a list
-        emb = c.get('embedding')
-        if emb:
-            if isinstance(emb, list):
-                print(f"  - Embedding type: list, len: {len(emb)}")
-            elif isinstance(emb, str):
-                print(f"  - Embedding type: str, len: {len(emb)}")
-            else:
-                print(f"  - Embedding type: {type(emb)}")
+    # Try fetching a single meeting to see if user_id column exists in the response
+    res = supabase.table("meetings").select("*").limit(1).execute()
+    print("Connection successful!")
+    if res.data:
+        meeting = res.data[0]
+        print("Columns in meetings table:")
+        for key in meeting.keys():
+            print(f" - {key}")
+        if "user_id" in meeting:
+            print("\nSuccess: 'user_id' column exists!")
         else:
-            print("  - Embedding is None")
-else:
-    print("Meeting not found!")
+            print("\nWarning: 'user_id' column DOES NOT exist in 'meetings'!")
+    else:
+        print("No meetings found in table 'meetings' to check column names. Trying to select specific columns...")
+        try:
+            res_id = supabase.table("meetings").select("user_id").limit(1).execute()
+            print("Success: 'user_id' column exists (querying 'select(user_id)' succeeded)!")
+        except Exception as e:
+            print("Error querying 'user_id' column:", e)
+            print("Warning: 'user_id' column probably does NOT exist!")
+            
+except Exception as e:
+    print("Error communicating with Supabase:", e)
