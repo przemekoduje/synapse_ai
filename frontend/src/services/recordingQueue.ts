@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { appStorage } from './storage';
 import * as FileSystem from 'expo-file-system/legacy';
 
 const ACTIVE_RECORDING_KEY = 'synapse_ai_active_recording_uri';
@@ -29,7 +29,7 @@ async function ensureDirectoryExists(): Promise<void> {
  */
 export async function saveActiveRecordingUri(uri: string): Promise<void> {
   try {
-    await AsyncStorage.setItem(ACTIVE_RECORDING_KEY, uri);
+    await appStorage.setItem(ACTIVE_RECORDING_KEY, uri);
     console.log('[Queue] Zapisano aktywną ścieżkę nagrywania:', uri);
   } catch (error) {
     console.error('[Queue] Błąd podczas zapisywania aktywnej ścieżki:', error);
@@ -41,7 +41,7 @@ export async function saveActiveRecordingUri(uri: string): Promise<void> {
  */
 export async function clearActiveRecordingUri(): Promise<void> {
   try {
-    await AsyncStorage.removeItem(ACTIVE_RECORDING_KEY);
+    await appStorage.removeItem(ACTIVE_RECORDING_KEY);
     console.log('[Queue] Wyczyszczono aktywną ścieżkę nagrywania.');
   } catch (error) {
     console.error('[Queue] Błąd podczas czyszczenia aktywnej ścieżki:', error);
@@ -53,7 +53,7 @@ export async function clearActiveRecordingUri(): Promise<void> {
  */
 export async function getActiveRecordingUri(): Promise<string | null> {
   try {
-    return await AsyncStorage.getItem(ACTIVE_RECORDING_KEY);
+    return await appStorage.getItem(ACTIVE_RECORDING_KEY);
   } catch (error) {
     console.error('[Queue] Błąd pobierania aktywnej ścieżki:', error);
     return null;
@@ -65,7 +65,7 @@ export async function getActiveRecordingUri(): Promise<string | null> {
  */
 export async function getQueue(): Promise<QueueItem[]> {
   try {
-    const rawQueue = await AsyncStorage.getItem(RECORDINGS_QUEUE_KEY);
+    const rawQueue = await appStorage.getItem(RECORDINGS_QUEUE_KEY);
     if (!rawQueue) return [];
     return JSON.parse(rawQueue);
   } catch (error) {
@@ -79,7 +79,7 @@ export async function getQueue(): Promise<QueueItem[]> {
  */
 async function saveQueue(queue: QueueItem[]): Promise<void> {
   try {
-    await AsyncStorage.setItem(RECORDINGS_QUEUE_KEY, JSON.stringify(queue));
+    await appStorage.setItem(RECORDINGS_QUEUE_KEY, JSON.stringify(queue));
   } catch (error) {
     console.error('[Queue] Błąd zapisu kolejki:', error);
   }
