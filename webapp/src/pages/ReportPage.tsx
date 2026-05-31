@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import ChatAssistant from '../components/ChatAssistant'
 import { 
@@ -257,7 +257,30 @@ export default function ReportPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
+      {/* Top Navbar */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-40 h-16 flex items-center justify-between px-6 shadow-xs">
+        <div className="flex items-center gap-3">
+          <Link to="/" className="flex items-center gap-1.5 text-slate-500 hover:text-indigo-650 transition-colors font-bold text-sm">
+            <span>←</span> Powrót do panelu
+          </Link>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="font-extrabold text-slate-900">Synapse AI Report Hub</span>
+        </div>
+        <button
+          onClick={async () => {
+            if (window.confirm('Czy na pewno chcesz się wylogować?')) {
+              await supabase.auth.signOut()
+            }
+          }}
+          className="flex items-center gap-1.5 hover:bg-rose-50 text-slate-550 hover:text-rose-600 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all border border-transparent hover:border-rose-100 cursor-pointer"
+        >
+          Wyloguj
+        </button>
+      </header>
+
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
       {/* Lewa Kolumna: Czat RAG (30-40% szerokości) */}
       <aside className="w-full md:w-1/3 bg-white border-r border-slate-200 p-6 flex flex-col justify-between">
         <div className="h-full flex flex-col">
@@ -570,6 +593,7 @@ export default function ReportPage() {
           )}
         </section>
       </main>
+      </div>
     </div>
   )
 }
