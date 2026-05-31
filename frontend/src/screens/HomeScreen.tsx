@@ -253,8 +253,8 @@ export default function HomeScreen() {
             {user ? `Dzień dobry, ${user.name}.` : 'Witaj w Synapse AI'}
           </Text>
           {user && (
-            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.7}>
-              <Ionicons name="log-out-outline" size={22} color="#64748B" />
+            <TouchableOpacity style={styles.dashboardButton} onPress={() => navigation.navigate('History')} activeOpacity={0.7}>
+              <Ionicons name="arrow-forward-outline" size={22} color="#64748B" />
             </TouchableOpacity>
           )}
         </View>
@@ -664,7 +664,7 @@ const styles = StyleSheet.create({
     width: '100%',
     marginBottom: 4,
   },
-  logoutButton: {
+  dashboardButton: {
     position: 'absolute',
     right: 0,
     top: 0,

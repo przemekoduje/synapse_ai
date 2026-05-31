@@ -9,6 +9,8 @@ import MeetingScreen from './src/screens/MeetingScreen';
 import InspectionScreen from './src/screens/InspectionScreen';
 import AnalysisResultScreen from './src/screens/AnalysisResultScreen';
 import QuickNoteScreen from './src/screens/QuickNoteScreen';
+import HistoryScreen from './src/screens/HistoryScreen';
+import MeetingDetailScreen from './src/screens/MeetingDetailScreen';
 
 // Definicja typów dla nawigacji
 export type RootStackParamList = {
@@ -25,6 +27,8 @@ export type RootStackParamList = {
     user_action_flags: object;
     trace_id: string;
   };
+  History: undefined;
+  MeetingDetail: { meetingId: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -75,6 +79,16 @@ export default function App() {
           name="AnalysisResult" 
           component={AnalysisResultScreen} 
           options={{ title: 'Weryfikacja Wyników' }}
+        />
+        <Stack.Screen 
+          name="History" 
+          component={HistoryScreen} 
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen 
+          name="MeetingDetail" 
+          component={MeetingDetailScreen} 
+          options={{ title: 'Szczegóły Narady' }}
         />
       </Stack.Navigator>
       <StatusBar style="auto" />

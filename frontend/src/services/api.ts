@@ -115,3 +115,31 @@ export const uploadVideoInspection = async (uri: string) => {
   }
 };
 
+export const askQuestion = async (meetingId: string, question: string) => {
+  try {
+    console.log('[API] Zadawanie pytania do spotkania:', meetingId);
+    const response = await fetch(`${API_BASE_URL}/ask`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Bypass-Tunnel-Reminder': 'true',
+      },
+      body: JSON.stringify({
+        meeting_id: meetingId,
+        question: question,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || 'Błąd generowania odpowiedzi');
+    }
+
+    return await response.json();
+  } catch (error: any) {
+    console.error('Błąd podczas askQuestion:', error?.message || error);
+    throw error;
+  }
+};
+
