@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, BackgroundTasks, File, UploadFile
+from fastapi import FastAPI, Request, BackgroundTasks, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -171,7 +171,8 @@ else:
 @app.post("/upload-audio")
 async def upload_audio_endpoint(
     request: Request,
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    user_id: str = Form(None)
 ):
     trace_id = request.state.trace_id
     logger.info(f"[Trace ID: {trace_id}] Nowy upload audio (synchroniczny): {file.filename}")
@@ -208,6 +209,8 @@ async def upload_audio_endpoint(
                     "short_summary": short_summary,
                     "detailed_description": detailed_description
                 }
+                if user_id:
+                    meeting_payload["user_id"] = user_id
                 meeting_res = supabase_client.table("meetings").insert(meeting_payload).execute()
                 
                 if meeting_res.data and len(meeting_res.data) > 0:

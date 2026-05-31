@@ -6,6 +6,7 @@ import * as Linking from 'expo-linking';
 WebBrowser.maybeCompleteAuthSession();
 
 export interface UserSession {
+  id: string;
   name: string;
   email: string;
 }
@@ -103,6 +104,7 @@ export async function getCurrentUser(): Promise<UserSession | null> {
     const name = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'Użytkownik';
     
     return {
+      id: user.id,
       name,
       email: user.email || '',
     };

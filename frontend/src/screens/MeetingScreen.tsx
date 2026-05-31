@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { uploadAudio } from '../services/api';
+import { getCurrentUser } from '../services/auth';
 import { 
   saveActiveRecordingUri, 
   clearActiveRecordingUri, 
@@ -104,7 +105,9 @@ export default function MeetingScreen({ navigation }: Props) {
     if (syncingQueue) return;
     setSyncingQueue(true);
     try {
-      await syncQueue(uploadAudio);
+      const currentUser = await getCurrentUser();
+      const userId = currentUser?.id;
+      await syncQueue((uri) => uploadAudio(uri, userId));
       const q = await getQueue();
       setQueueSize(q.length);
     } catch (err) {
@@ -202,7 +205,9 @@ export default function MeetingScreen({ navigation }: Props) {
       console.log('[MeetingScreen] Rozpoczęcie wysyłki pliku audio z kolejki:', item.localUri);
       
       // Wysyłamy plik
-      const result = await uploadAudio(item.localUri);
+      const currentUser = await getCurrentUser();
+      const userId = currentUser?.id;
+      const result = await uploadAudio(item.localUri, userId);
       
       if (result.status === 'success' || result.status === 'ok') {
         // Usuwamy plik z dysku i bazy dopiero po sukcesie
@@ -244,7 +249,9 @@ export default function MeetingScreen({ navigation }: Props) {
     setSyncingQueue(true);
     try {
       console.log('[MeetingScreen] Ręczna synchronizacja kolejki...');
-      const stats = await syncQueue(uploadAudio);
+      const currentUser = await getCurrentUser();
+      const userId = currentUser?.id;
+      const stats = await syncQueue((uri) => uploadAudio(uri, userId));
       const q = await getQueue();
       setQueueSize(q.length);
 
