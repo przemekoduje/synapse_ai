@@ -40,7 +40,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={session ? <DashboardPage /> : <LoginPage />} />
-        <Route path="/raport/:meeting_id" element={session ? <ReportPage /> : <LoginPage />} />
+        <Route path="/raport/:meeting_id" element={<ReportPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

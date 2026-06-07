@@ -24,6 +24,8 @@ interface Meeting {
   detailed_description: string | null
   transcription: string
   created_at: string
+  user_id?: string | null
+  user_email?: string | null
 }
 
 interface ActionItem {
@@ -41,6 +43,8 @@ export default function ReportPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false)
+  const [session, setSession] = useState<any>(null)
+  const [isGuest, setIsGuest] = useState(true)
 
   // Stan edycji ogólnej spotkania (tytuł, podsumowanie, opis)
   const [isEditingMeeting, setIsEditingMeeting] = useState(false)
@@ -70,6 +74,10 @@ export default function ReportPage() {
       setError(null)
 
       try {
+        // 0. Pobranie sesji
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+        setSession(currentSession)
+
         // 1. Pobranie danych o spotkaniu
         const { data: meetingData, error: meetingError } = await supabase
           .from('meetings')
@@ -78,12 +86,40 @@ export default function ReportPage() {
           .single()
 
         if (meetingError) throw meetingError
-        setMeeting(meetingData)
-        setEditTitle(meetingData.title || '')
-        setEditSummary(meetingData.short_summary || '')
-        setEditDescription(meetingData.detailed_description || '')
 
-        // 2. Pobranie powiązanych action items
+        let updatedMeetingData = meetingData
+
+        // 2. Automatyczne przypisanie (claim) jeśli zalogowany użytkownik ma ten sam email co gość w spotkaniu
+        if (currentSession && meetingData.user_email && meetingData.user_email === currentSession.user.email && !meetingData.user_id) {
+          try {
+            const { data: claimedData, error: claimError } = await supabase
+              .from('meetings')
+              .update({ user_id: currentSession.user.id })
+              .eq('id', meeting_id)
+              .select('*')
+              .single()
+
+            if (!claimError && claimedData) {
+              updatedMeetingData = claimedData
+            }
+          } catch (claimErr) {
+            console.error('[ReportPage] Błąd auto-claim:', claimErr)
+          }
+        }
+
+        setMeeting(updatedMeetingData)
+        setEditTitle(updatedMeetingData.title || '')
+        setEditSummary(updatedMeetingData.short_summary || '')
+        setEditDescription(updatedMeetingData.detailed_description || '')
+
+        // Określenie statusu gościa
+        const hasSession = !!currentSession
+        const isOwner = hasSession && updatedMeetingData.user_id === currentSession.user.id
+        const isLegacy = !updatedMeetingData.user_id && !updatedMeetingData.user_email
+        const canEdit = isOwner || (hasSession && isLegacy)
+        setIsGuest(!canEdit)
+
+        // 3. Pobranie powiązanych action items
         const { data: itemsData, error: itemsError } = await supabase
           .from('action_items')
           .select('*')
@@ -261,23 +297,34 @@ export default function ReportPage() {
       {/* Top Navbar */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40 h-16 flex items-center justify-between px-6 shadow-xs">
         <div className="flex items-center gap-3">
-          <Link to="/" className="flex items-center gap-1.5 text-slate-500 hover:text-indigo-650 transition-colors font-bold text-sm">
-            <span>←</span> Powrót do panelu
-          </Link>
+          {session && (
+            <Link to="/" className="flex items-center gap-1.5 text-slate-500 hover:text-indigo-650 transition-colors font-bold text-sm">
+              <span>←</span> Powrót do panelu
+            </Link>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <span className="font-extrabold text-slate-900">Synapse AI Report Hub</span>
         </div>
-        <button
-          onClick={async () => {
-            if (window.confirm('Czy na pewno chcesz się wylogować?')) {
-              await supabase.auth.signOut()
-            }
-          }}
-          className="flex items-center gap-1.5 hover:bg-rose-50 text-slate-550 hover:text-rose-600 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all border border-transparent hover:border-rose-100 cursor-pointer"
-        >
-          Wyloguj
-        </button>
+        {session ? (
+          <button
+            onClick={async () => {
+              if (window.confirm('Czy na pewno chcesz się wylogować?')) {
+                await supabase.auth.signOut()
+              }
+            }}
+            className="flex items-center gap-1.5 hover:bg-rose-50 text-slate-550 hover:text-rose-600 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all border border-transparent hover:border-rose-100 cursor-pointer"
+          >
+            Wyloguj
+          </button>
+        ) : (
+          <Link
+            to="/"
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-all cursor-pointer shadow-xs"
+          >
+            Zaloguj się
+          </Link>
+        )}
       </header>
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
@@ -311,37 +358,39 @@ export default function ReportPage() {
           )}
 
           <div className="flex items-center gap-2 self-start sm:self-center">
-            {isEditingMeeting ? (
-              <>
+            {!isGuest && (
+              isEditingMeeting ? (
+                <>
+                  <button
+                    onClick={handleSaveMeeting}
+                    disabled={savingMeeting}
+                    className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
+                  >
+                    {savingMeeting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    Zapisz nagłówek
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsEditingMeeting(false)
+                      setEditTitle(meeting.title || '')
+                      setEditSummary(meeting.short_summary || '')
+                      setEditDescription(meeting.detailed_description || '')
+                    }}
+                    className="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                    Anuluj
+                  </button>
+                </>
+              ) : (
                 <button
-                  onClick={handleSaveMeeting}
-                  disabled={savingMeeting}
-                  className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
+                  onClick={() => setIsEditingMeeting(true)}
+                  className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer"
                 >
-                  {savingMeeting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                  Zapisz nagłówek
+                  <Edit3 className="w-4 h-4" />
+                  Edytuj Spotkanie
                 </button>
-                <button
-                  onClick={() => {
-                    setIsEditingMeeting(false)
-                    setEditTitle(meeting.title || '')
-                    setEditSummary(meeting.short_summary || '')
-                    setEditDescription(meeting.detailed_description || '')
-                  }}
-                  className="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                  Anuluj
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => setIsEditingMeeting(true)}
-                className="flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer"
-              >
-                <Edit3 className="w-4 h-4" />
-                Edytuj Spotkanie
-              </button>
+              )
             )}
           </div>
         </header>
@@ -405,17 +454,19 @@ export default function ReportPage() {
               <CheckSquare className="w-5 h-5 text-indigo-600" />
               Zadania i Action Items
             </h2>
-            <button
-              onClick={() => setShowAddForm(!showAddForm)}
-              className="flex items-center gap-1 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Dodaj zadanie
-            </button>
+            {!isGuest && (
+              <button
+                onClick={() => setShowAddForm(!showAddForm)}
+                className="flex items-center gap-1 bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Dodaj zadanie
+              </button>
+            )}
           </div>
 
           {/* Formularz dodawania nowego zadania */}
-          {showAddForm && (
+          {showAddForm && !isGuest && (
             <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 mb-4 space-y-3">
               <h3 className="text-sm font-bold text-slate-800">Nowe Zadanie</h3>
               <div>
@@ -530,35 +581,53 @@ export default function ReportPage() {
                         </div>
                         <div className="flex items-center gap-2 self-end sm:self-center">
                           {/* Klikalny status pozwalający szybko zakończyć zadanie */}
-                          <button
-                            onClick={() => handleToggleStatus(item)}
-                            className={`px-2.5 py-1 text-xs rounded-full font-semibold border transition-all hover:scale-105 cursor-pointer ${
-                              item.status === 'Zakończony' || item.status === 'Completed' || item.status === 'done'
-                                ? 'bg-green-50 text-green-700 border-green-200'
-                                : item.status === 'W toku'
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                  : 'bg-yellow-50 text-yellow-700 border-yellow-300'
-                            }`}
-                            title="Kliknij, aby przełączyć status"
-                          >
-                            {item.status || 'Otwarty'}
-                          </button>
+                          {isGuest ? (
+                            <span
+                              className={`px-2.5 py-1 text-xs rounded-full font-semibold border ${
+                                item.status === 'Zakończony' || item.status === 'Completed' || item.status === 'done'
+                                  ? 'bg-green-50 text-green-700 border-green-200'
+                                  : item.status === 'W toku'
+                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                    : 'bg-yellow-50 text-yellow-700 border-yellow-300'
+                              }`}
+                            >
+                              {item.status || 'Otwarty'}
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleToggleStatus(item)}
+                              className={`px-2.5 py-1 text-xs rounded-full font-semibold border transition-all hover:scale-105 cursor-pointer ${
+                                item.status === 'Zakończony' || item.status === 'Completed' || item.status === 'done'
+                                  ? 'bg-green-50 text-green-700 border-green-200'
+                                  : item.status === 'W toku'
+                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                    : 'bg-yellow-50 text-yellow-700 border-yellow-300'
+                              }`}
+                              title="Kliknij, aby przełączyć status"
+                            >
+                              {item.status || 'Otwarty'}
+                            </button>
+                          )}
                           
                           {/* Edycja / Usuwanie */}
-                          <button
-                            onClick={() => startEditItem(item)}
-                            className="p-1.5 text-slate-500 hover:text-indigo-650 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
-                            title="Edytuj zadanie"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteItem(item.id)}
-                            className="p-1.5 text-slate-550 hover:text-red-650 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
-                            title="Usuń zadanie"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {!isGuest && (
+                            <>
+                              <button
+                                onClick={() => startEditItem(item)}
+                                className="p-1.5 text-slate-500 hover:text-indigo-650 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                                title="Edytuj zadanie"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteItem(item.id)}
+                                className="p-1.5 text-slate-550 hover:text-red-650 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                                title="Usuń zadanie"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     )}

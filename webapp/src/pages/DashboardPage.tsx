@@ -53,11 +53,25 @@ export default function DashboardPage() {
       const userId = session.user.id
       setUser(session.user)
 
-      // 1. Pobranie spotkań (należących do użytkownika lub starszych bez przypisanego id)
+      // 0. Automatyczne przypisywanie (claim) nagrań gościa dla e-maila użytkownika
+      if (session.user.email) {
+        try {
+          await supabase
+            .from('meetings')
+            .update({ user_id: userId })
+            .eq('user_email', session.user.email)
+            .is('user_id', null)
+        } catch (claimErr) {
+          console.error('[DashboardPage] Błąd auto-claim:', claimErr)
+        }
+      }
+
+      // 1. Pobranie spotkań (należących do użytkownika, powiązanych z e-mailem lub starszych legacy publicznych)
+      const emailFilter = session.user.email ? `,user_email.eq.${session.user.email}` : ''
       const { data: meetingsData, error: meetingsError } = await supabase
         .from('meetings')
         .select('*')
-        .or(`user_id.eq.${userId},user_id.is.null`)
+        .or(`user_id.eq.${userId}${emailFilter},and(user_id.is.null,user_email.is.null)`)
         .order('created_at', { ascending: false })
 
       if (meetingsError) throw meetingsError

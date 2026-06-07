@@ -10,8 +10,11 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
-  Easing
+  Easing,
+  TextInput,
+  Modal
 } from 'react-native';
+import { appStorage } from '../services/storage';
 import { Audio } from 'expo-av';
 import { uploadAudio } from '../services/api';
 import { getCurrentUser } from '../services/auth';
@@ -40,6 +43,11 @@ export default function MeetingScreen({ navigation }: Props) {
   const [isRecording, setIsRecording] = useState(false);
   const [queueSize, setQueueSize] = useState(0);
   const [syncingQueue, setSyncingQueue] = useState(false);
+
+  // Stan dla modala e-maila gościa
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [guestEmailInput, setGuestEmailInput] = useState('');
+  const [pendingUri, setPendingUri] = useState<string | null>(null);
 
   // Animacje przycisku nagrywania (Halo Effect)
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -107,7 +115,7 @@ export default function MeetingScreen({ navigation }: Props) {
     try {
       const currentUser = await getCurrentUser();
       const userId = currentUser?.id;
-      await syncQueue((uri) => uploadAudio(uri, userId));
+      await syncQueue((uri, email) => uploadAudio(uri, userId, email));
       const q = await getQueue();
       setQueueSize(q.length);
     } catch (err) {
@@ -185,13 +193,29 @@ export default function MeetingScreen({ navigation }: Props) {
       await clearActiveRecordingUri();
 
       if (uri) {
-        // Przenosimy nagranie do bezpiecznej trwałej kolejki
-        const queueItem = await persistRecordingToQueue(uri);
-        const currentQueue = await getQueue();
-        setQueueSize(currentQueue.length);
-        
-        // Próbujemy natychmiast wysłać
-        await handleUploadQueueItem(queueItem, true);
+        // Sprawdź czy użytkownik jest zalogowany
+        const currentUser = await getCurrentUser();
+        if (currentUser) {
+          // Zalogowany -> zapisz bezpośrednio w kolejce i wyślij
+          const queueItem = await persistRecordingToQueue(uri);
+          const currentQueue = await getQueue();
+          setQueueSize(currentQueue.length);
+          await handleUploadQueueItem(queueItem, true);
+        } else {
+          // Niezalogowany (Gość) -> sprawdź czy mamy zapisany email w storage
+          const savedEmail = await appStorage.getItem('synapse_ai_guest_email');
+          if (savedEmail) {
+            // Mamy e-mail -> zapisz z mailem i wyślij
+            const queueItem = await persistRecordingToQueue(uri, savedEmail);
+            const currentQueue = await getQueue();
+            setQueueSize(currentQueue.length);
+            await handleUploadQueueItem(queueItem, true);
+          } else {
+            // Brak e-maila -> otwórz modal do wpisania e-maila
+            setPendingUri(uri);
+            setShowEmailModal(true);
+          }
+        }
       }
     } catch (err) {
       console.error('Błąd zatrzymania nagrywania:', err);
@@ -199,15 +223,61 @@ export default function MeetingScreen({ navigation }: Props) {
     }
   };
 
+  const handleGuestEmailSubmit = async () => {
+    const email = guestEmailInput.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
+      Alert.alert('Błędny e-mail', 'Podaj prawidłowy adres e-mail.');
+      return;
+    }
+
+    setShowEmailModal(false);
+    setGuestEmailInput('');
+
+    const uri = pendingUri;
+    setPendingUri(null);
+
+    if (uri) {
+      try {
+        // Zapamiętaj e-mail w lokalnej pamięci
+        await appStorage.setItem('synapse_ai_guest_email', email);
+        
+        // Zapisz w kolejce z powiązanym mailem i wyślij
+        const queueItem = await persistRecordingToQueue(uri, email);
+        const currentQueue = await getQueue();
+        setQueueSize(currentQueue.length);
+        
+        await handleUploadQueueItem(queueItem, true);
+      } catch (err) {
+        console.error('[MeetingScreen] Błąd zapisu/wysyłki gościa:', err);
+      }
+    }
+  };
+
+  const handleGuestEmailCancel = async () => {
+    setShowEmailModal(false);
+    setGuestEmailInput('');
+    const uri = pendingUri;
+    setPendingUri(null);
+
+    if (uri) {
+      // Zapisz bez maila
+      const queueItem = await persistRecordingToQueue(uri);
+      const currentQueue = await getQueue();
+      setQueueSize(currentQueue.length);
+      await handleUploadQueueItem(queueItem, true);
+    }
+  };
+
   const handleUploadQueueItem = async (item: QueueItem, shouldNavigate: boolean) => {
     setTranscribing(true);
     try {
-      console.log('[MeetingScreen] Rozpoczęcie wysyłki pliku audio z kolejki:', item.localUri);
+      console.log('[MeetingScreen] Rozpoczęcie wysyłki pliku audio z kolejki:', item.localUri, 'email:', item.userEmail);
       
       // Wysyłamy plik
       const currentUser = await getCurrentUser();
       const userId = currentUser?.id;
-      const result = await uploadAudio(item.localUri, userId);
+      const result = await uploadAudio(item.localUri, userId, item.userEmail);
       
       if (result.status === 'success' || result.status === 'ok') {
         // Usuwamy plik z dysku i bazy dopiero po sukcesie
@@ -251,7 +321,7 @@ export default function MeetingScreen({ navigation }: Props) {
       console.log('[MeetingScreen] Ręczna synchronizacja kolejki...');
       const currentUser = await getCurrentUser();
       const userId = currentUser?.id;
-      const stats = await syncQueue((uri) => uploadAudio(uri, userId));
+      const stats = await syncQueue((uri, email) => uploadAudio(uri, userId, email));
       const q = await getQueue();
       setQueueSize(q.length);
 
@@ -385,6 +455,48 @@ export default function MeetingScreen({ navigation }: Props) {
           {(isRecording || transcribing || syncingQueue) && <ActivityIndicator size="small" color="#0EA5E9" style={{ marginTop: 10 }} />}
         </View>
       </ScrollView>
+
+      {/* Modal do pobierania e-maila od gościa */}
+      <Modal
+        visible={showEmailModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={handleGuestEmailCancel}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Wprowadź swój e-mail ✉️</Text>
+            <Text style={styles.modalDescription}>
+              Nie jesteś zalogowany. Podaj adres e-mail, pod który wyślemy raport ze spotkania i przypiszemy nagranie w chmurze.
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Twój adres e-mail"
+              placeholderTextColor="#94A3B8"
+              value={guestEmailInput}
+              onChangeText={setGuestEmailInput}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus={true}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.modalButtonCancel]} 
+                onPress={handleGuestEmailCancel}
+              >
+                <Text style={styles.modalButtonCancelText}>Pomiń</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.modalButtonSubmit]} 
+                onPress={handleGuestEmailSubmit}
+              >
+                <Text style={styles.modalButtonSubmitText}>Wyślij</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -499,4 +611,76 @@ const styles = StyleSheet.create({
   },
   micIcon: { fontSize: 32 },
   micStatus: { color: '#475569', fontSize: 14, fontWeight: '600' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  modalDescription: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 18,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 15,
+    color: '#0F172A',
+    backgroundColor: '#F8FAFC',
+    marginBottom: 20,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButtonCancel: {
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  modalButtonCancelText: {
+    color: '#64748B',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  modalButtonSubmit: {
+    backgroundColor: '#0EA5E9',
+  },
+  modalButtonSubmitText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
+  },
 });

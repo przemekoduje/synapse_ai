@@ -112,7 +112,7 @@ export default function HomeScreen() {
       console.log('[HomeScreen] Ręczna synchronizacja kolejki...');
       const currentUser = await getCurrentUser();
       const userId = currentUser?.id;
-      const stats = await syncQueue((uri) => uploadAudio(uri, userId));
+      const stats = await syncQueue((uri, email) => uploadAudio(uri, userId, email));
       await checkQueue();
       
       if (stats.successCount > 0) {

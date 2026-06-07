@@ -37,7 +37,7 @@ export const analyzeMeeting = async (transcription: string, session_id: string, 
   }
 };
 
-export const uploadAudio = async (uri: string, userId?: string) => {
+export const uploadAudio = async (uri: string, userId?: string, userEmail?: string) => {
   try {
     const formData = new FormData();
     // @ts-ignore
@@ -49,6 +49,9 @@ export const uploadAudio = async (uri: string, userId?: string) => {
 
     if (userId) {
       formData.append('user_id', userId);
+    }
+    if (userEmail) {
+      formData.append('user_email', userEmail);
     }
 
     console.log('[API] Wysyłanie audio (fetch) do /upload-audio z timeoutem 90s...');

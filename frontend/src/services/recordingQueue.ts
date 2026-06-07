@@ -11,6 +11,7 @@ export interface QueueItem {
   timestamp: number;
   status: 'pending' | 'syncing' | 'failed';
   error?: string;
+  userEmail?: string;
 }
 
 /**
@@ -88,7 +89,7 @@ async function saveQueue(queue: QueueItem[]): Promise<void> {
 /**
  * Przenosi nagranie z tymczasowej ścieżki do trwałego katalogu i rejestruje w kolejce.
  */
-export async function persistRecordingToQueue(tempUri: string): Promise<QueueItem> {
+export async function persistRecordingToQueue(tempUri: string, userEmail?: string): Promise<QueueItem> {
   await ensureDirectoryExists();
   const id = `rec_${Date.now()}`;
   const fileName = `${id}.m4a`;
@@ -105,6 +106,7 @@ export async function persistRecordingToQueue(tempUri: string): Promise<QueueIte
     localUri,
     timestamp: Date.now(),
     status: 'pending',
+    userEmail,
   };
 
   const queue = await getQueue();
@@ -195,7 +197,7 @@ export async function recoverCrashRecording(): Promise<QueueItem | null> {
  * Synchronizacja kolejki - przesyłanie zaległych nagrań.
  */
 export async function syncQueue(
-  uploadFn: (uri: string) => Promise<any>
+  uploadFn: (uri: string, userEmail?: string) => Promise<any>
 ): Promise<{ successCount: number; failCount: number }> {
   const queue = await getQueue();
   const pendingItems = queue.filter((item) => item.status !== 'syncing');
@@ -209,8 +211,8 @@ export async function syncQueue(
     try {
       await updateQueueItemStatus(item.id, 'syncing');
       
-      console.log(`[Queue] Próba wysłania elementu ${item.id} (${item.localUri})...`);
-      const response = await uploadFn(item.localUri);
+      console.log(`[Queue] Próba wysłania elementu ${item.id} (${item.localUri}) dla e-maila: ${item.userEmail || 'brak'}...`);
+      const response = await uploadFn(item.localUri, item.userEmail);
       
       // Zgodnie z wytycznymi Code Review: usuwamy tylko po pełnym sukcesie (status sukcesu z serwera)
       if (response && (response.status === 'success' || response.status === 'ok')) {

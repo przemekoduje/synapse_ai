@@ -172,10 +172,11 @@ else:
 async def upload_audio_endpoint(
     request: Request,
     file: UploadFile = File(...),
-    user_id: str = Form(None)
+    user_id: str = Form(None),
+    user_email: str = Form(None)
 ):
     trace_id = request.state.trace_id
-    logger.info(f"[Trace ID: {trace_id}] Nowy upload audio (synchroniczny): {file.filename}")
+    logger.info(f"[Trace ID: {trace_id}] Nowy upload audio (synchroniczny): {file.filename}, user_id: {user_id}, user_email: {user_email}")
     
     temp_file_path = f"temp_{trace_id}_{file.filename}"
     try:
@@ -209,8 +210,30 @@ async def upload_audio_endpoint(
                     "short_summary": short_summary,
                     "detailed_description": detailed_description
                 }
-                if user_id:
-                    meeting_payload["user_id"] = user_id
+                
+                resolved_user_id = user_id
+                if not resolved_user_id and user_email:
+                    try:
+                        logger.info(f"[Trace ID: {trace_id}] Szukam użytkownika o e-mailu {user_email} w auth.users...")
+                        users = supabase_client.auth.admin.list_users()
+                        for u in users:
+                            if u.email and u.email.lower() == user_email.strip().lower():
+                                resolved_user_id = u.id
+                                logger.info(f"[Trace ID: {trace_id}] Dopasowano użytkownika: {resolved_user_id}")
+                                break
+                    except Exception as auth_err:
+                        logger.error(f"[Trace ID: {trace_id}] Błąd szukania w auth.users: {str(auth_err)}")
+                
+                if resolved_user_id:
+                    meeting_payload["user_id"] = resolved_user_id
+                
+                # Zapisujemy e-mail gościa lub 'anonymous' dla nowych spotkań bez powiązanego user_id,
+                # aby nie były traktowane jako legacy public (gdzie user_id IS NULL i user_email IS NULL)
+                if user_email:
+                    meeting_payload["user_email"] = user_email.strip().lower()
+                elif not resolved_user_id:
+                    meeting_payload["user_email"] = "anonymous"
+                    
                 meeting_res = supabase_client.table("meetings").insert(meeting_payload).execute()
                 
                 if meeting_res.data and len(meeting_res.data) > 0:
